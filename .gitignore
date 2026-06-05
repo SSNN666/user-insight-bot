@@ -1,0 +1,21 @@
+# 虚拟环境
+.venv/
+venv/
+env/
+
+# 环境变量（包含 API Key 等重要信息）
+.env
+
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# 系统文件
+.DS_Store
+Thumbs.db
