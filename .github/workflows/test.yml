@@ -1,0 +1,36 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Setup Python
+        run: uv python install 3.13
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest -v --tb=short
+
+      - name: Verify imports
+        run: |
+          uv run python -c "
+          from tools import tools; print(f'{len(tools)} tools OK')
+          from agent.agent import _build_graph; print('agent OK')
+          from flywheel.retriever import retrieve_relevant_samples; print('retriever OK')
+          from config.settings import get_settings; print(f'config OK (v{get_settings().APP_VERSION})')
+          "

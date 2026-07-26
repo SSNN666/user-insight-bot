@@ -1,0 +1,92 @@
+[
+  {
+    "id": "evt_001",
+    "scenario": "高价值用户批量流失",
+    "description": "top segment中至少5名用户从未流失状态转为churned状态",
+    "expected_event_type": "high_value_churn",
+    "expected_priority": "high",
+    "should_trigger": true,
+    "threshold_check": "churned_delta >= 5"
+  },
+  {
+    "id": "evt_002",
+    "scenario": "订单活跃度急剧下降",
+    "description": "平台总活跃用户数下降超过30%",
+    "expected_event_type": "order_volume_crash",
+    "expected_priority": "high",
+    "should_trigger": true,
+    "threshold_check": "total_users_pct_change <= -30"
+  },
+  {
+    "id": "evt_003",
+    "scenario": "用户分群结构变化",
+    "description": "某个segment的用户数变化超过10%",
+    "expected_event_type": "segment_shift",
+    "expected_priority": "normal",
+    "should_trigger": true,
+    "threshold_check": "user_count_pct >= 10"
+  },
+  {
+    "id": "evt_004",
+    "scenario": "平均消费金额显著变化",
+    "description": "全平台平均消费金额变化超过20%",
+    "expected_event_type": "avg_order_change",
+    "expected_priority": "normal",
+    "should_trigger": true,
+    "threshold_check": "avg_monetary_delta_pct >= 20"
+  },
+  {
+    "id": "evt_005",
+    "scenario": "新用户快速增长",
+    "description": "用户总数增长超过20%",
+    "expected_event_type": "new_user_spike",
+    "expected_priority": "normal",
+    "should_trigger": true,
+    "threshold_check": "total_users_pct_change >= 20"
+  },
+  {
+    "id": "evt_006",
+    "scenario": "异常数据波动",
+    "description": "某个segment的monetary指标偏离均值超过3个标准差",
+    "expected_event_type": "extreme_outlier",
+    "expected_priority": "high",
+    "should_trigger": true,
+    "threshold_check": "std_count > 3"
+  },
+  {
+    "id": "evt_007",
+    "scenario": "正常稳定状态（无事件）",
+    "description": "数据变化均在阈值以内",
+    "expected_event_type": null,
+    "expected_priority": null,
+    "should_trigger": false,
+    "threshold_check": "all_within_threshold"
+  },
+  {
+    "id": "evt_008",
+    "scenario": "多个低优先级事件合并",
+    "description": "同时发生segment shift和avg order change，在合并窗口内应合并为一个MERGED_LOW_PRIORITY事件",
+    "expected_event_type": "merged_low_priority",
+    "expected_priority": "normal",
+    "should_trigger": true,
+    "threshold_check": "merged_from_multiple"
+  },
+  {
+    "id": "evt_009",
+    "scenario": "事件冷却抑制",
+    "description": "同类型normal事件在冷却期内再次触发应被抑制",
+    "expected_event_type": null,
+    "expected_priority": null,
+    "should_trigger": false,
+    "threshold_check": "suppressed_by_cooldown"
+  },
+  {
+    "id": "evt_010",
+    "scenario": "高优先级事件豁免冷却",
+    "description": "high_value_churn事件即使在冷却期内也应触发",
+    "expected_event_type": "high_value_churn",
+    "expected_priority": "high",
+    "should_trigger": true,
+    "threshold_check": "high_priority_bypasses_cooldown"
+  }
+]

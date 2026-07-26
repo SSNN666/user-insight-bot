@@ -1,0 +1,134 @@
+{
+  "timestamp": "2026-07-25T16:14:07.391565+00:00",
+  "hit_rate_mrr": {
+    "num_queries": 10,
+    "hit_rate": {
+      "@1": 0.7,
+      "@3": 0.8,
+      "@5": 0.8
+    },
+    "mrr": 0.75,
+    "per_query": [
+      {
+        "id": "q1",
+        "query": "高价值用户有哪些特征？",
+        "results_returned": 4,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q2",
+        "query": "各分群的用户数量和占比是多少？",
+        "results_returned": 2,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q3",
+        "query": "最近用户流失情况如何？",
+        "results_returned": 5,
+        "first_relevant_rank": null,
+        "rr": 0.0,
+        "hits_at_k": {
+          "1": 0,
+          "3": 0,
+          "5": 0
+        }
+      },
+      {
+        "id": "q4",
+        "query": "分群决策树规则是什么？",
+        "results_returned": 2,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q5",
+        "query": "如何挽留即将流失的高价值用户？",
+        "results_returned": 2,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 2,
+          "5": 2
+        }
+      },
+      {
+        "id": "q6",
+        "query": "对比各分群的消费能力差异",
+        "results_returned": 2,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q7",
+        "query": "最近一周订单量有什么变化？",
+        "results_returned": 5,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q8",
+        "query": "新用户增长是否正常？",
+        "results_returned": 2,
+        "first_relevant_rank": 1,
+        "rr": 1.0,
+        "hits_at_k": {
+          "1": 1,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q9",
+        "query": "哪些用户群体最有营销价值？",
+        "results_returned": 2,
+        "first_relevant_rank": 2,
+        "rr": 0.5,
+        "hits_at_k": {
+          "1": 0,
+          "3": 1,
+          "5": 1
+        }
+      },
+      {
+        "id": "q10",
+        "query": "分群之间的用户流转情况如何？",
+        "results_returned": 3,
+        "first_relevant_rank": null,
+        "rr": 0.0,
+        "hits_at_k": {
+          "1": 0,
+          "3": 0,
+          "5": 0
+        }
+      }
+    ]
+  }
+}

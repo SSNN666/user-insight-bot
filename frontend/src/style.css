@@ -1,0 +1,7 @@
+/* Global reset — scoped styles are in each component's <style scoped> block. */
+body {
+  margin: 0;
+  font-family: 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

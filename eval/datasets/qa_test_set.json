@@ -1,0 +1,202 @@
+[
+  {
+    "id": "qa_001",
+    "question": "各分群的人数是多少？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["用户数", "平均近度", "平均频次", "平均消费"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_002",
+    "question": "高价值用户有哪些特征？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_high_value_users"],
+    "expected_keys": ["高价值", "segment", "recency"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_003",
+    "question": "分群的决策规则是什么？",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_rules"],
+    "expected_keys": ["recency", "frequency", "monetary", "|---"],
+    "min_segments": 0
+  },
+  {
+    "id": "qa_004",
+    "question": "低价值用户和高价值用户的购买频次有什么区别？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["频次", "segment"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_005",
+    "question": "如何提升高价值用户的复购率？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_segment_rules"],
+    "expected_keys": ["建议", "策略", "数据支撑"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_006",
+    "question": "列出所有高价值用户的ID和消费金额",
+    "intent": "user_segment",
+    "expected_tools": ["get_high_value_users"],
+    "expected_keys": ["user_id", "monetary"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_007",
+    "question": "各个分群最近一次购买距今多少天？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["近度", "recency"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_008",
+    "question": "分群标准中的recency阈值是多少？",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_rules"],
+    "expected_keys": ["recency", "<="],
+    "min_segments": 0
+  },
+  {
+    "id": "qa_009",
+    "question": "请分析当前用户整体的消费健康度",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_segment_rules", "get_high_value_users"],
+    "expected_keys": ["健康", "分群", "消费"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_010",
+    "question": "流失用户有什么共同特征？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_segment_rules"],
+    "expected_keys": ["流失", "近度", "频次"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_011",
+    "question": "有多少活跃用户和沉睡用户？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["活跃", "沉睡", "flow"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_012",
+    "question": "高价值用户的复购间隔是多少？",
+    "intent": "user_segment",
+    "expected_tools": ["get_high_value_users"],
+    "expected_keys": ["repurchase", "interval", "frequency"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_013",
+    "question": "各分群的价格敏感度差异大吗？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["价格", "敏感", "segment"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_014",
+    "question": "最近分群结构有什么变化？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["变化", "segment", "用户数"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_015",
+    "question": "帮我分析一下用户的生命周期价值分布",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_high_value_users"],
+    "expected_keys": ["价值", "消费", "segment"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_016",
+    "question": "各品类的购买偏好是怎样的？",
+    "intent": "product_insight",
+    "expected_tools": [],
+    "expected_keys": ["品类", "偏好", "购买"],
+    "min_segments": 0
+  },
+  {
+    "id": "qa_017",
+    "question": "你好，今天天气怎么样？",
+    "intent": "general",
+    "expected_tools": [],
+    "expected_keys": ["抱歉", "电商", "用户分群"],
+    "min_segments": 0
+  },
+  {
+    "id": "qa_018",
+    "question": "给我一个完整的用户分群运营方案",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats", "get_segment_rules"],
+    "expected_keys": ["方案", "策略", "数据支撑", "分群"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_019",
+    "question": "哪个分群的用户数增长最快？",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["增长", "用户数", "segment"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_020",
+    "question": "对比一下高价值用户和潜力用户的消费行为差异",
+    "intent": "user_segment",
+    "expected_tools": ["get_user_segment_stats"],
+    "expected_keys": ["消费", "频次", "segment", "差异"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_021",
+    "question": "各分群的销售额增长和GMV提升对比",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_growth"],
+    "expected_keys": ["销售额增长", "GMV", "分群", "对比", "%"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_022",
+    "question": "分析一下各分群的环比增长趋势",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_growth"],
+    "expected_keys": ["增长", "分群", "转化率", "销售额"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_023",
+    "question": "哪个分群的转化率变化最大？",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_growth"],
+    "expected_keys": ["转化率", "分群", "%", "变化"],
+    "min_segments": 1
+  },
+  {
+    "id": "qa_024",
+    "question": "高价值用户分群对比分析表",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_growth", "get_user_segment_stats"],
+    "expected_keys": ["销售额增长", "转化率变化", "GMV提升", "对比分析"],
+    "min_segments": 2
+  },
+  {
+    "id": "qa_025",
+    "question": "哪些分群在增长，哪些在下降？",
+    "intent": "user_segment",
+    "expected_tools": ["get_segment_growth"],
+    "expected_keys": ["增长", "下降", "分群", "%"],
+    "min_segments": 2
+  }
+]

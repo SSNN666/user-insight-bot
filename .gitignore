@@ -3,6 +3,10 @@
 venv/
 env/
 
+# Node
+node_modules/
+frontend/dist/
+
 # 环境变量（包含 API Key 等重要信息）
 .env
 
@@ -19,3 +23,8 @@ __pycache__/
 # 系统文件
 .DS_Store
 Thumbs.db
+
+# 运行时数据
+cache_data/
+logs/
+*.log

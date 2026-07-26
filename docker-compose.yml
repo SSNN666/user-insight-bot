@@ -1,0 +1,103 @@
+# ── User Insight Bot — 一键部署 ───────────────────────────────
+# 启动: docker compose up -d
+# 含GPU: docker compose --profile gpu up -d
+# 停止: docker compose down
+#
+# 注意: Ollama 首次启动需手动拉模型:
+#   docker compose exec ollama ollama pull qwen2.5:7b
+#   docker compose exec ollama ollama pull nomic-embed-text
+
+services:
+  # ════════════════════════════════════════════════════════════
+  # FastAPI 后端
+  # ════════════════════════════════════════════════════════════
+  api:
+    build: .
+    container_name: insight-api
+    ports:
+      - "8000:8000"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-http://ollama:11434/v1}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-ollama}
+      - LLM_MODEL_NAME=${LLM_MODEL_NAME:-qwen2.5:7b}
+      - FACT_CHECK_MODE=${FACT_CHECK_MODE:-relaxed}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./cache_data:/app/cache_data   # 快照、缓存、SQLite
+      - ./logs:/app/logs               # 结构化日志
+    depends_on:
+      ollama:
+        condition: service_healthy
+        required: false                # Ollama 挂了也能降级跑
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ════════════════════════════════════════════════════════════
+  # Gradio 管理后台
+  # ════════════════════════════════════════════════════════════
+  gradio:
+    build: .
+    container_name: insight-gradio
+    command: python app.py
+    ports:
+      - "7860:7860"
+    environment:
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      # Gradio 通过 bridge 网络访问 api 容器
+      - GRADIO_SERVER_NAME=0.0.0.0
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ════════════════════════════════════════════════════════════
+  # Vue 3 电商商城（生产构建 → Nginx 托管）
+  # ════════════════════════════════════════════════════════════
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: insight-frontend
+    ports:
+      - "5173:80"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  # ════════════════════════════════════════════════════════════
+  # Ollama（可选 — 需要GPU，本地开发建议用 start.bat）
+  # ════════════════════════════════════════════════════════════
+  ollama:
+    image: ollama/ollama:latest
+    container_name: insight-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    profiles: ["gpu"]                  # 默认不启动
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  ollama_data:
+
+networks:
+  default:
+    name: insight-net
