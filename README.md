@@ -152,8 +152,6 @@ Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷
 
 完整文档：http://localhost:8000/docs
 
-> 💡 **面试准备？** 看 [PORTFOLIO.md](PORTFOLIO.md) — 架构亮点 + 常见追问 + 面试自我介绍
-
 ---
 
 ## 项目结构
