@@ -34,6 +34,7 @@ class TaskRecord:
     session_id: str = ""
     tool_rounds: int = 0
     event_details: str | None = None
+    stage_results: str | None = None   # JSON:orchestrator 三段结果(monitor/analysis/strategy)
 
     def to_dict(self) -> dict:
         return {
@@ -49,6 +50,7 @@ class TaskRecord:
             "session_id": self.session_id,
             "tool_rounds": self.tool_rounds,
             "event_details": self.event_details,
+            "stage_results": self.stage_results,
         }
 
 
@@ -78,6 +80,10 @@ class TaskManager:
                     event_details   TEXT
                 )
             """)
+            # 轻量迁移:旧库补 stage_results 列(orchestrator 三段结果)
+            cols = [r[1] for r in conn.execute("PRAGMA table_info(watcher_tasks)").fetchall()]
+            if "stage_results" not in cols:
+                conn.execute("ALTER TABLE watcher_tasks ADD COLUMN stage_results TEXT")
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_tasks_status "
                 "ON watcher_tasks(status)"
@@ -110,6 +116,7 @@ class TaskManager:
             completed_at=d.get("completed_at"),
             session_id=d["session_id"], tool_rounds=d.get("tool_rounds", 0),
             event_details=d.get("event_details"),
+            stage_results=d.get("stage_results"),
         )
 
     # ── CRUD ─────────────────────────────────────────────────
@@ -167,6 +174,20 @@ class TaskManager:
             conn.execute(
                 "UPDATE watcher_tasks SET status='completed', result_text=?, tool_rounds=?, completed_at=? WHERE id=?",
                 (result_text, tool_rounds, self._now(), task_id),
+            )
+            conn.commit()
+
+    def set_completed_with_stages(
+        self, task_id: int, result_text: str, tool_rounds: int, stage_results: dict,
+    ) -> None:
+        """完成时附带 orchestrator 三段结果(monitor/analysis/strategy,JSON 落库)。"""
+        stages_json = json.dumps(stage_results, ensure_ascii=False)
+        with self._get_conn() as conn:
+            conn.execute(
+                """UPDATE watcher_tasks
+                   SET status='completed', result_text=?, tool_rounds=?,
+                       completed_at=?, stage_results=? WHERE id=?""",
+                (result_text, tool_rounds, self._now(), stages_json, task_id),
             )
             conn.commit()
 

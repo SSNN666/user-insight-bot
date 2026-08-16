@@ -84,9 +84,12 @@ class FactCheckResult(BaseModel):
 
 # ── Regex Patterns (compiled once) ──────────────────────────────
 
-RE_SEGMENT_COUNT = re.compile(r'分群\s*(\d+).*?(\d+)\s*人')
+RE_SEGMENT_COUNT = re.compile(
+    r'分群\s*(\d+)(?:(?!分群\s*\d)(?!\|).)*?(\d+)\s*人'
+)
 RE_SEGMENT_AVG = re.compile(
-    r'分群\s*(\d+).*?平均(近度|频次|消费).*?(\d+\.?\d*)'
+    r'分群\s*(\d+)(?:(?!分群\s*\d)(?!\|).)*?平均(近度|频次|消费)'
+    r'(?:(?!分群\s*\d)(?!\|).)*?(\d+\.?\d*)'
 )
 # Markdown table row: | segment | count | avg_recency | avg_freq | avg_monetary |
 RE_TABLE_ROW = re.compile(
@@ -179,9 +182,9 @@ def _fact_check_numerical(
                         field=field_key,
                         segment=seg,
                         claimed_value=claimed,
-                        actual_value=actual,
+                        actual_value=round(actual_f, 2),
                         claimed_text=m.group(0),
-                        description=f'分群{seg}的{field_key}为{actual}，而非{claimed}',
+                        description=f'分群{seg}的{field_key}为{actual_f:.2f}，而非{claimed:g}',
                     ))
 
     # Check markdown table rows

@@ -28,3 +28,6 @@ Thumbs.db
 cache_data/
 logs/
 *.log
+
+# 外部数据集(JData 等,体积大不入库)
+data/

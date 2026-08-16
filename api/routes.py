@@ -1,17 +1,43 @@
 """REST API endpoints — chat, health, feedback, debug, stats."""
 
+import asyncio
 import json
+import os
 import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
-from agent.agent import ask_agent
+from agent.agent import ask_agent, _ask_agent_internal
 from errors.exceptions import APIError, ParameterError
 from log.logger import get_logger
 
 logger = get_logger(__name__, log_type="user_chat")
 router = APIRouter()
+
+# ── 会话级执行串行化 ────────────────────────────────────────────
+# graph invoke/astream 共享 InMemorySaver checkpoint,同一 thread_id 并发
+# 会引发 checkpoint 版本冲突 → 同一 session 的图执行加锁串行化。
+_ask_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ask")
+
+_session_locks: dict[str, asyncio.Lock] = {}
+_default_session_lock = asyncio.Lock()
+
+
+def _get_session_lock(session_id: str) -> asyncio.Lock:
+    if not session_id or session_id == "default":
+        return _default_session_lock
+    lock = _session_locks.get(session_id)
+    if lock is None:
+        lock = _session_locks[session_id] = asyncio.Lock()
+    return lock
+
+
+def _get_censor():
+    from common.content_moderation import get_censor
+    return get_censor()
 
 # ── Pydantic models ────────────────────────────────────────────
 
@@ -19,12 +45,16 @@ router = APIRouter()
 class AskRequest(BaseModel):
     question: str = Field(..., min_length=1, max_length=2000)
     session_id: str = Field(default="default", max_length=64)
+    # 场景强制:auto=意图分类 | analysis=强制分析模式(管理台) | shopping=强制购物模式
+    mode: str = Field(default="auto", max_length=16)
 
 
 class AskResponse(BaseModel):
     reply: str
     session_id: str
     elapsed_ms: float
+    products: list[dict] | None = None   # 商品类 Skill 返回的商品(前端卡片/一键加购)
+    charts: list[dict] | None = None     # 分析类 Skill 返回的图表数据(前端内联 SVG 渲染)
 
 
 class ProductCreateResponse(BaseModel):
@@ -111,23 +141,74 @@ async def health_full():
     return await get_full_health()
 
 
+# ── 分群运营建议 ───────────────────────────────────────────────
+
+
+@router.get("/api/suggestions")
+async def api_suggestions():
+    """分群级运营建议:LLM 生成 + Layer 1 数值核查(与图表同源数据)。"""
+    try:
+        from agent.suggestions import generate_segment_suggestions
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(
+            _ask_executor, generate_segment_suggestions,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Chat ───────────────────────────────────────────────────────
 
 
 @router.post("/ask", response_model=AskResponse)
 async def ask(req: AskRequest):
     try:
+        # ── 输入防护:Prompt 注入检测 + 百度内容审核(均 fail-open 除注入硬拦截) ──
+        from common.guardrails import detect_injection, WARN_NOTICE
+        verdict = detect_injection(req.question)
+        if verdict.blocked:
+            raise HTTPException(status_code=403, detail="输入包含指令注入迹象，已拒绝处理")
+        censor = _get_censor()
+        input_check = censor.check_text(req.question, task="SHOP_QA_INPUT")
+        if not input_check.passed:
+            raise HTTPException(status_code=403, detail="输入内容未通过安全审核")
+
         start = time.monotonic()
-        reply = ask_agent(req.question, session_id=req.session_id)
+        # 场景强制:管理台发 mode=analysis(屏蔽购物误路由);mode=shopping 强制购物人设
+        system_override = None
+        force_analysis = req.mode == "analysis"
+        if req.mode == "shopping":
+            from agent.prompts import PROMPT_SHOPPING
+            system_override = PROMPT_SHOPPING
+
+        # 同步 Agent 图跑在线程池,不阻塞事件循环(健康检查/商城 API 不受影响)
+        loop = asyncio.get_event_loop()
+        async with _get_session_lock(req.session_id):
+            reply, _, products, charts = await loop.run_in_executor(
+                _ask_executor, _ask_agent_internal, req.question, req.session_id,
+                None, None, system_override, force_analysis,
+            )
+
+        # ── 输出防护:内容审核(fail-open)+ 注入提示附加 ──
+        output_check = censor.check_text(reply, task="SHOP_QA_OUTPUT")
+        if not output_check.passed:
+            reply = "抱歉，本次回答未通过内容安全审核，已替换为系统提示。请换个问法再试。"
+        if verdict.warned:
+            reply += WARN_NOTICE
+
         elapsed = (time.monotonic() - start) * 1000
         return AskResponse(
             reply=reply, session_id=req.session_id,
             elapsed_ms=round(elapsed, 2),
+            products=products or None,
+            charts=charts or None,
         )
     except ParameterError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except APIError as e:
         raise HTTPException(status_code=502, detail=str(e))
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("unexpected_error", extra={"error": str(e), "question": req.question[:100]})
         raise HTTPException(status_code=500, detail="服务器内部错误")
@@ -135,25 +216,53 @@ async def ask(req: AskRequest):
 
 @router.post("/ask/stream")
 async def ask_stream(req: AskRequest):
-    """Stream agent response via Server-Sent Events."""
+    """Stream agent execution via SSE.
+
+    Event schema(每帧 `data: {"event": ..., ...}`):
+      meta / node_start / node_end_detail / tool_call / tool_result /
+      delta / fact_check / answer / done / error
+    """
     from fastapi.responses import StreamingResponse
     from agent.agent import _ask_agent_stream
 
+    # ── 输入防护:注入检测 + 内容审核(fail-open) ──
+    from common.guardrails import detect_injection, WARN_NOTICE
+    verdict = detect_injection(req.question)
+    input_ok = _get_censor().check_text(req.question, task="SHOP_QA_INPUT").passed
+
+    lock = _get_session_lock(req.session_id)
+
     async def event_stream():
-        try:
-            async for chunk in _ask_agent_stream(
-                req.question, session_id=req.session_id,
-            ):
-                if chunk:
-                    yield f"data: {json.dumps({'token': chunk})}\n\n"
-            yield f"data: {json.dumps({'done': True})}\n\n"
-        except ParameterError as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        except APIError as e:
-            yield f"data: {json.dumps({'error': str(e)})}\n\n"
-        except Exception as e:
-            logger.error("stream_error", extra={"error": str(e)})
-            yield f"data: {json.dumps({'error': '服务器内部错误'})}\n\n"
+        async with lock:
+            try:
+                if verdict.blocked or not input_ok:
+                    yield f"data: {json.dumps({'event': 'error', 'message': '输入未通过安全校验，已拒绝处理'}, ensure_ascii=False)}\n\n"
+                    return
+                final_answer = ""
+                async for event in _ask_agent_stream(
+                    req.question, session_id=req.session_id,
+                ):
+                    if not event:
+                        continue
+                    if event["event"] == "answer":
+                        final_answer = event["content"]
+                        # 输出审核(fail-open)
+                        if not _get_censor().check_text(final_answer, task="SHOP_QA_OUTPUT").passed:
+                            final_answer = "抱歉，本次回答未通过内容安全审核，已替换为系统提示。请换个问法再试。"
+                            event = dict(event, content=final_answer)
+                        if verdict.warned:
+                            final_answer += WARN_NOTICE
+                            event = dict(event, content=final_answer)
+                    elif event["event"] == "done":
+                        event = dict(event, reply=final_answer or event.get("reply", ""))
+                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+            except ParameterError as e:
+                yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            except APIError as e:
+                yield f"data: {json.dumps({'event': 'error', 'message': str(e)}, ensure_ascii=False)}\n\n"
+            except Exception as e:
+                logger.error("stream_error", extra={"error": str(e)})
+                yield f"data: {json.dumps({'event': 'error', 'message': '服务器内部错误'}, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),
@@ -314,6 +423,78 @@ async def debug_trigger_event():
     }
 
 
+# ── 商品图像解析 (VL 扩展, Phase: 加分项) ──────────────────
+
+
+@router.post("/api/product-image/analyze")
+async def analyze_product_image(
+    file: UploadFile = File(...),
+    user_id: int = Form(default=1),
+):
+    """上传商品图片 → qwen3-vl-plus 结构化标签 → 并入用户画像偏好。
+
+    VL 只做图像内容理解(品类/外观/颜色/材质),不做文字提取;
+    无多模态模型时返回 503 明确提示。
+    """
+    from config.settings import get_settings
+
+    if file.content_type and not file.content_type.startswith("image/"):
+        raise HTTPException(status_code=415, detail="仅支持图片文件")
+    data = await file.read()
+    if len(data) > 8 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="图片过大(>8MB)")
+
+    upload_dir = os.path.join(get_settings().CACHE_DIR, "uploads")
+    os.makedirs(upload_dir, exist_ok=True)
+    ext = (file.filename or "").rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "jpg"
+    if ext not in ("jpg", "jpeg", "png", "webp"):
+        ext = "jpg"
+    image_path = os.path.join(upload_dir, f"{uuid.uuid4().hex[:12]}.{ext}")
+    with open(image_path, "wb") as f:
+        f.write(data)
+
+    from skills import SkillRegistry
+    skill = SkillRegistry.get("analyze_product_image")
+    if skill is None:
+        raise HTTPException(status_code=503, detail="商品图像解析 Skill 未注册")
+    result = skill.execute(image_path=image_path, mime=file.content_type or "image/jpeg")
+
+    if result.status.value == "missing":
+        raise HTTPException(status_code=503, detail=result.summary)
+    if result.status.value == "error":
+        raise HTTPException(status_code=502, detail=result.error or "图像解析失败")
+
+    # 标签并入用户画像偏好
+    from api.data_store import add_user_preference
+    profile = add_user_preference(user_id, result.data or {})
+
+    return {
+        "status": "ok",
+        "user_id": user_id,
+        "tags": result.data,
+        "confidence": result.confidence,
+        "profile_updated": profile is not None,
+    }
+
+
+@router.get("/api/recommendations")
+async def get_recommendations(user_id: int = 1):
+    """个性化推荐(画像驱动):分群+品类偏好+标签 → 商品打分。"""
+    from skills import SkillRegistry
+    skill = SkillRegistry.get("get_personal_recommendations")
+    if skill is None:
+        raise HTTPException(status_code=503, detail="推荐 Skill 未注册")
+    result = skill.execute(user_id=user_id)
+    if result.status.value == "error":
+        raise HTTPException(status_code=502, detail=result.error or "推荐计算失败")
+    return {
+        "user_id": user_id,
+        "status": result.status.value,
+        "products": result.data or [],
+        "summary": result.summary,
+    }
+
+
 # ── Manual Annotation (Phase 7) ───────────────────────────────
 
 class AnnotateRequest(BaseModel):
@@ -447,6 +628,32 @@ async def stats_segment_ratio(force: bool = False):
             count = int((seg['segment'] == seg_id).sum())
             ratios.append({"segment": int(seg_id), "count": count, "ratio": round(count / total * 100, 1)})
         return ratios
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/stats/segment-trend")
+async def stats_segment_trend(limit: int = 20):
+    """分群时间趋势:消费磁盘上的历史快照,返回每快照×每分群的时序行。
+
+    Watcher 每轮 poll 都落一个快照,此端点把累积的历史变成可见的时间序列。
+    """
+    try:
+        from pipeline.user_segmentation import load_snapshots
+        snaps = load_snapshots()[-limit:]
+        rows = []
+        for s in snaps:
+            ts = s.timestamp[:16].replace("T", " ")
+            for seg in sorted(s.segment_stats.keys()):
+                stats = s.segment_stats[seg]
+                rows.append({
+                    "timestamp": ts,
+                    "segment": int(seg),
+                    "user_count": stats.get("user_count", 0),
+                    "avg_monetary": round(stats.get("avg_monetary", 0), 2),
+                    "avg_frequency": round(stats.get("avg_frequency", 0), 2),
+                })
+        return rows
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

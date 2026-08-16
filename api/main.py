@@ -12,6 +12,7 @@ from api.middleware import (
     RequestLoggingMiddleware,
     RateLimitMiddleware,
     ExceptionHandlerMiddleware,
+    ApiKeyMiddleware,
 )
 from log.logger import get_logger
 
@@ -85,9 +86,11 @@ def create_app() -> FastAPI:
 
     # Middleware order (outermost first):
     # 1. ExceptionHandler — catch all errors → JSON
-    # 2. RateLimiter — sliding window + dedup for /ask
-    # 3. RequestLogger — structured JSON logging
+    # 2. ApiKey — demo-grade auth for /debug/* + /tasks/*
+    # 3. RateLimiter — sliding window + dedup for /ask
+    # 4. RequestLogger — structured JSON logging
     app.add_middleware(ExceptionHandlerMiddleware)
+    app.add_middleware(ApiKeyMiddleware)
     app.add_middleware(RateLimitMiddleware)
     app.add_middleware(RequestLoggingMiddleware)
 

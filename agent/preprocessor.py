@@ -101,49 +101,47 @@ def preprocess_query(query: str, llm) -> PreprocessResult:
     Returns:
         ``PreprocessResult`` with intent, entities, and sub-queries.
     """
-    import json
-
     messages = [
         {"role": "system", "content": PREPROCESS_SYSTEM},
         {"role": "user", "content": query},
     ]
 
-    try:
-        response = llm.invoke(messages)
-        raw = response.content.strip()
-
-        # Extract JSON block (handle markdown fences)
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        data = json.loads(raw)
-        result = PreprocessResult(
-            intent=QueryIntent(data.get("intent", "general")),
-            entities=data.get("entities", {}),
-            sub_queries=data.get("sub_queries", [query]),
+    def _fallback() -> PreprocessResult:
+        return PreprocessResult(
+            intent=QueryIntent.GENERAL,
+            sub_queries=[query],
             original_query=query,
         )
+
+    try:
+        response = llm.invoke(messages)
+        from common.json_repair import load_json_or_default
+        data, repair = load_json_or_default(
+            response.content,
+            default={"intent": "general", "entities": {}, "sub_queries": [query]},
+            llm=llm, retry_messages=messages,
+            hint='{"intent":"...","entities":{"time":[],"segments":[],"products":[],"cities":[]},"sub_queries":["..."]}',
+            logger=logger,
+        )
+        try:
+            result = PreprocessResult(
+                intent=QueryIntent(data.get("intent", "general")),
+                entities=data.get("entities", {}),
+                sub_queries=data.get("sub_queries", [query]),
+                original_query=query,
+            )
+        except Exception as e:
+            # 未知 intent 值等校验失败 → 与解析失败同路径兜底
+            logger.warning("preprocess_validate_failed", extra={"error": str(e)})
+            result = _fallback()
         logger.info("preprocess_done", extra={
             "intent": result.intent.value,
             "sub_queries": len(result.sub_queries),
+            "repaired": repair.repaired,
+            "retries": repair.retries,
         })
         return result
 
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.warning("preprocess_parse_failed", extra={"error": str(e)})
-        # Fallback: treat as general, no decomposition
-        return PreprocessResult(
-            intent=QueryIntent.GENERAL,
-            sub_queries=[query],
-            original_query=query,
-        )
     except Exception as e:
         logger.error("preprocess_error", extra={"error": str(e)})
-        return PreprocessResult(
-            intent=QueryIntent.GENERAL,
-            sub_queries=[query],
-            original_query=query,
-        )
+        return _fallback()

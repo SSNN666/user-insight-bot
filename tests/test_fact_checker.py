@@ -126,6 +126,49 @@ class TestNumericalCheck:
         assert violations[0].actual_value == 50
 
 
+# 真实数据口径的统计(与线上 JData 3 分群一致)
+REAL_STATS = _make_stats_result([
+    {"segment": 0, "用户数": 1852, "平均近度": 46.9152, "平均频次": 1.08855, "平均消费": 2478.82},
+    {"segment": 1, "用户数": 746, "平均近度": 1.29357, "平均频次": 1.06971, "平均消费": 2591.91},
+    {"segment": 2, "用户数": 262, "平均近度": 37.1641, "平均频次": 2.78244, "平均消费": 7678.67},
+])
+
+
+class TestCrossBoundaryRegression:
+    """回归:多分群长句里,数字必须归属它自己的分群(线上假阳性案例)。"""
+
+    def test_real_case_multi_segment_prose_no_false_positive(self):
+        """线上误报原文:分群2 的 7678.67 被错配给分群0 → 修复后零违规。"""
+        reply = ("分群0用户基数最大但活跃度较低；分群1近期活跃度高但频次偏低；"
+                 "分群2虽人数最少，但平均消费达7678.67元、频次2.78244次，"
+                 "为核心高价值用户群体。")
+        violations = _fact_check_numerical(reply, [REAL_STATS])
+        assert len(violations) == 0
+
+    def test_count_claim_not_cross_segment(self):
+        reply = "分群0用户最多，分群2共262人。"
+        violations = _fact_check_numerical(reply, [REAL_STATS])
+        assert len(violations) == 0          # 262 归属分群2,核查通过
+
+    def test_wrong_avg_in_first_clause_still_detected(self):
+        reply = "分群0的平均消费为9999元；分群2的平均消费达7678.67元。"
+        violations = _fact_check_numerical(reply, [REAL_STATS])
+        assert len(violations) == 1          # 只罚分群0,不误伤分群2
+        v = violations[0]
+        assert v.segment == 0
+        assert v.claimed_value == 9999
+        assert v.actual_value == 2478.82     # 浮点已四舍五入到 2 位
+
+    def test_avg_claim_cannot_cross_table_cells(self):
+        """声称与数字之间夹着表格时,不得跨单元格取值。"""
+        reply = ("分群0的平均消费为\n"
+                 "| 分群 | 用户数 | 平均消费 |\n"
+                 "|------|--------|----------|\n"
+                 "| 2 | 262 | 7678.67 |\n")
+        violations = _fact_check_numerical(reply, [REAL_STATS])
+        assert all(v.segment != 0 for v in violations)  # 分群0 未匹配到 7678.67
+
+
 # ══════════════════════════════════════════════════════════════════
 # Layer 2 — Rule
 # ══════════════════════════════════════════════════════════════════

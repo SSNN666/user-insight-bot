@@ -2,7 +2,7 @@
 flow classification, and cluster snapshot persistence.
 
 Phase 3 upgrades:
-- ``find_optimal_k()`` — elbow + silhouette auto-selection
+- ``find_optimal_k()`` — Gap statistic + 1-SE 简约规则自动选 K
 - ``perform_clustering()`` — uses auto-K when ``n_clusters=None``
 - ``extract_rules()`` — returns dict with pruned tree + flow summary
 - ``classify_user_flow()`` — rule-based flow tagging
@@ -36,7 +36,17 @@ def find_optimal_k(
     k_min: int | None = None,
     k_max: int | None = None,
 ) -> tuple[int, dict]:
-    """Select best K via combined elbow + silhouette score.
+    """Gap statistic + 1-SE 简约规则自动选 K。
+
+    选 K 依据(顺序):
+      1. Gap statistic(Tibshirani 2001):真实数据 inertia 对比均匀参考分布,
+         1-SE 规则取"再增加 K 收益不再显著"的最小 K——不会像肘部+轮廓的
+         组合分那样单调爬升永远选到上限;
+      2. 最小簇约束:任一簇人数 < max(AUTO_K_MIN_CLUSTER_SIZE, n×RATIO) 的 K
+         直接淘汰(业务分群需要最低规模,真实数据实测 k≥6 出现 18 人迷你簇);
+      3. 全部淘汰时退回满足约束的最小 K,再不行用 k_max。
+    大样本(>8000 人)评估时固定种子下采样,聚类本身仍用全量数据。
+    肘部/silhouette 保留在 diagnostics 里作为可观测信息。
 
     Args:
         X_scaled: Standardized feature matrix (n_samples, n_features).
@@ -48,44 +58,72 @@ def find_optimal_k(
     settings = get_settings()
     k_min = k_min or settings.AUTO_K_MIN
     k_max = k_max or settings.AUTO_K_MAX
-    k_range = range(k_min, min(k_max + 1, len(X_scaled)))
+    k_max = min(k_max, max(2, len(X_scaled) - 1))
+    k_min = min(k_min, k_max)
+    rng = np.random.default_rng(42)
 
+    if len(X_scaled) > 8000:
+        idx = rng.choice(len(X_scaled), 8000, replace=False)
+        X = X_scaled[idx]
+    else:
+        X = X_scaled
+    n = len(X)
+
+    ks = list(range(1, k_max + 1))
     diagnostics: dict[int, dict] = {}
     inertias: dict[int, float] = {}
     silhouettes: dict[int, float] = {}
 
-    for k in k_range:
+    for k in ks:
         km = KMeans(n_clusters=k, random_state=42, n_init=10)
-        labels = km.fit_predict(X_scaled)
+        labels = km.fit_predict(X)
         inertias[k] = km.inertia_
-        if k >= 2:
-            silhouettes[k] = silhouette_score(X_scaled, labels)
-        else:
-            silhouettes[k] = 0.0
+        silhouettes[k] = silhouette_score(X, labels) if k >= 2 else 0.0
 
-    # Normalize to [0,1]
-    inv_vals = np.array(list(inertias.values()))
-    sil_vals = np.array(list(silhouettes.values()))
-    inv_norm = (inv_vals - inv_vals.min()) / (inv_vals.max() - inv_vals.min() + 1e-10)
-    sil_norm = (sil_vals - sil_vals.min()) / (sil_vals.max() - sil_vals.min() + 1e-10)
-    # inertia_improvement = 1 - normalized_inertia (lower inertia is better)
-    inv_improve = 1.0 - inv_norm
+    # Gap statistic:B 组均匀参考分布(覆盖观测范围,与标准化量纲无关)
+    B = settings.AUTO_K_GAP_B
+    ref = rng.uniform(X.min(axis=0), X.max(axis=0), size=(B,) + X.shape)
+    log_w_ref = np.empty((B, len(ks)))
+    for b in range(B):
+        for j, k in enumerate(ks):
+            log_w_ref[b, j] = np.log(
+                KMeans(n_clusters=k, random_state=42, n_init=10).fit(ref[b]).inertia_
+            )
+    gap = log_w_ref.mean(axis=0) - np.array([np.log(inertias[k]) for k in ks])
+    sk = log_w_ref.std(axis=0, ddof=1) * np.sqrt(1 + 1 / B)
 
-    # Combined score
-    combined = 0.5 * sil_norm + 0.5 * inv_improve
-    best_idx = int(np.argmax(combined))
-    best_k = list(inertias.keys())[best_idx]
+    def _valid(k: int) -> bool:
+        labels = KMeans(n_clusters=k, random_state=42, n_init=10).fit_predict(X)
+        min_size = max(settings.AUTO_K_MIN_CLUSTER_SIZE,
+                       int(n * settings.AUTO_K_MIN_CLUSTER_RATIO))
+        return int(np.bincount(labels).min()) >= min_size
 
-    for i, k in enumerate(inertias.keys()):
+    # 1-SE 规则:最小的 k 满足 gap(k) ≥ gap(k+1) − s(k+1)
+    best_k = None
+    for k in range(k_min, k_max):
+        if not _valid(k):
+            continue
+        if gap[k - 1] >= gap[k] - sk[k]:
+            best_k = k
+            break
+    if best_k is None:
+        valid = [k for k in range(k_min, k_max + 1) if _valid(k)]
+        best_k = valid[0] if valid else k_max
+
+    for j, k in enumerate(ks):
         diagnostics[k] = {
             "inertia": round(inertias[k], 2),
-            "silhouette": round(silhouettes.get(k, 0.0), 4),
-            "combined_score": round(float(combined[i]), 4),
+            "silhouette": round(silhouettes[k], 4),
+            "gap": round(float(gap[j]), 4),
+            "gap_se": round(float(sk[j]), 4),
+            "valid": bool(k < k_min or _valid(k)),
         }
 
     logger.info("optimal_k_found", extra={
         "best_k": best_k,
+        "method": "gap_statistic",
         "silhouette": round(silhouettes[best_k], 4),
+        "gap": round(float(gap[best_k - 1]), 4),
         "search_range": f"[{k_min},{k_max}]",
     })
     return best_k, diagnostics
@@ -129,6 +167,8 @@ def perform_clustering(
         )
         mapping = {old: new for new, old in enumerate(cluster_avg.index)}
         rfm_df['segment'] = rfm_df['segment'].map(mapping)
+        # 同步模型 labels_(旧编号 → 新分群),避免调用方拿到与 rfm_df 不一致的模型
+        kmeans.labels_ = np.array([mapping[l] for l in kmeans.labels_])
 
         logger.info("clustering_done", extra={
             "n_clusters": n_clusters, "users": len(rfm_df),
@@ -321,6 +361,18 @@ def save_snapshot(
     fpath = os.path.join(snap_dir, fname)
     with open(fpath, "wb") as f:
         pickle.dump(snapshot, f)
+
+    # ── 保留策略:超出 SNAPSHOT_KEEP 的最旧快照自动清理(防无限累积) ──
+    keep = settings.SNAPSHOT_KEEP
+    if keep and keep > 0:
+        existing = sorted(
+            fn for fn in os.listdir(snap_dir) if fn.endswith(".pkl")
+        )
+        for old in existing[:-keep]:
+            try:
+                os.remove(os.path.join(snap_dir, old))
+            except OSError:
+                pass
 
     logger.info("snapshot_saved", extra={
         "path": fpath, "k": k_value, "users": len(user_assignments),

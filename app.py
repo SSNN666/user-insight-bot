@@ -65,20 +65,161 @@ def _patch(path: str, json: dict) -> dict:
 def _delete(path: str) -> dict:
     return _client.delete(f"{API}{path}").json()
 
+def _load_failed(e: Exception) -> tuple:
+    """图表加载失败的统一描述:连接类错误给启动提示,其余透出真实原因。"""
+    if isinstance(e, httpx.ConnectError):
+        return None, "_加载失败：FastAPI(:8000)未运行——请先启动 run_api.py,或重新双击 start.bat_"
+    return None, f"_加载失败：{e}_"
+
+def _seg_names() -> dict:
+    """分群业务命名(LLM 生成 + 启发式兜底,带缓存),图表标签共用。"""
+    try:
+        from pipeline.segment_naming import get_segment_names
+        return get_segment_names()
+    except Exception:
+        return {}
+
+def _seg_label(seg, names: dict) -> str:
+    name = names.get(int(seg))
+    return f"分群 {seg} · {name}" if name else f"分群 {seg}"
+
+def _freshness_line() -> str:
+    """数据新鲜度标注:数据时间 / 数据源 / 分群命名——运营敢用数据的前提。"""
+    from config.settings import get_settings
+    settings = get_settings()
+    parts = []
+    try:
+        from pipeline.user_segmentation import load_snapshots
+        snaps = load_snapshots()
+        if snaps:
+            parts.append(f"🕐 数据时间: {snaps[-1].timestamp[:16].replace('T', ' ')}")
+    except Exception:
+        pass
+    if settings.DATA_SOURCE == "tianchi":
+        cap = f"(行为采样 {settings.TIANCHI_MAX_ACTIONS:,} 行)" if settings.TIANCHI_MAX_ACTIONS else "(全量)"
+        parts.append(f"🗄️ 数据源: JData 真实数据 {cap}")
+    else:
+        parts.append(f"🗄️ 数据源: {'MySQL→缓存→mock 降级链' if settings.DATA_SOURCE == 'auto' else settings.DATA_SOURCE}")
+    names = _seg_names()
+    if names:
+        parts.append("🏷️ " + " / ".join(f"分群{k}·{v}" for k, v in sorted(names.items())))
+    return "  \n".join(parts) + "  \n"
+
 # ── Tab 1: Chat ────────────────────────────────────────────────
 
 # Store last exchange for feedback
 _last_qa: dict = {"question": "", "reply": ""}
 
+def _chart_spec_to_fig(spec: dict | None):
+    """chart 协议(agent/chart_extract.py)→ matplotlib 图,Gradio 对话内展示。"""
+    if not spec or not spec.get("categories"):
+        return None
+    cats = spec.get("categories", [])
+    series = spec.get("series", [])
+    colors = ["#4C72B0", "#55A868", "#C44E52", "#8B5CF6",
+              "#E5C641", "#13C2C2", "#fa8c16", "#722ed1"]
+
+    fig, ax = plt.subplots(figsize=(7, 3.5))
+    if spec.get("type") == "bar":
+        x = np.arange(len(cats))
+        w = 0.7 / max(len(series), 1)
+        for i, s in enumerate(series):
+            data = [v if v is not None else 0 for v in s["data"]]
+            ax.bar(x + (i - (len(series) - 1) / 2) * w, data, w,
+                   label=s["name"], color=colors[i % len(colors)])
+        ax.set_xticks(x)
+        ax.set_xticklabels(cats, fontsize=8)
+    else:
+        for i, s in enumerate(series):
+            xs = [j for j, v in enumerate(s["data"]) if v is not None]
+            ys = [v for v in s["data"] if v is not None]
+            ax.plot(xs, ys, "o-", linewidth=2, markersize=4,
+                    label=s["name"], color=colors[i % len(colors)])
+        ax.set_xticks(range(len(cats)))
+        ax.set_xticklabels(cats, rotation=30, ha="right", fontsize=7)
+    ax.set_title(spec.get("title", ""), fontweight="bold", fontsize=11)
+    ax.legend(fontsize=8)
+    fig.tight_layout()
+    return fig
+
+_ANALYSIS_KEYWORDS = ("分群", "统计", "消费", "人数", "趋势", "分析", "群", "用户", "价值", "对比", "图")
+
+def _fallback_charts() -> list[dict]:
+    """Agent 未调工具(如从会话记忆直接回答)时,直接拉端点建图。
+
+    确定性兜底:图表始终与最新数据同步,不依赖 LLM 是否调用 Skill。
+    统计端点 → 柱状图;快照端点 → 趋势折线图(≥2 个快照时)。
+    """
+    charts: list[dict] = []
+    try:
+        rows = _get("/stats/rfm", params={"force": False})
+        if rows:
+            names = _seg_names()
+            charts.append({
+                "type": "bar",
+                "title": "各分群人数与平均消费",
+                "categories": [_seg_label(r["segment"], names) for r in rows],
+                "series": [
+                    {"name": "用户数", "data": [r["user_count"] for r in rows]},
+                    {"name": "平均消费(元)", "data": [r["avg_monetary"] for r in rows]},
+                ],
+            })
+    except Exception:
+        pass
+    try:
+        trend = _get("/stats/segment-trend", params={"limit": 20})
+        if trend and len({t["timestamp"] for t in trend}) >= 2:
+            names = _seg_names()
+            timestamps = sorted({t["timestamp"] for t in trend})
+            segs = sorted({t["segment"] for t in trend})
+            series = []
+            for seg in segs:
+                pts = {t["timestamp"]: t.get("user_count") for t in trend
+                       if t["segment"] == seg}
+                series.append({
+                    "name": _seg_label(seg, names),
+                    "data": [pts.get(ts) for ts in timestamps],
+                })
+            charts.append({
+                "type": "line",
+                "title": "分群人数时间趋势",
+                "categories": timestamps,
+                "series": series,
+            })
+    except Exception:
+        pass
+    return charts
+
 def chat_fn(message, history):
     global _last_qa
+    bar_fig = line_fig = None
     try:
-        data = _post("/ask", {"question": message, "session_id": "gradio-chat"})
-        reply = data.get("reply", "Error: no reply")
+        # 管理台 = 运营分析台:强制分析模式,不做购物路由
+        data = _post("/ask", {"question": message, "session_id": "gradio-chat",
+                              "mode": "analysis"})
+        if isinstance(data, dict) and "error" in data:
+            # 中间件拒绝(限流/重复问题等):把原因如实显示给用户
+            err = data.get("error") or {}
+            msg = err.get("message") if isinstance(err, dict) else str(err)
+            reply = f"⚠️ {msg or '请求被拒绝'}"
+        else:
+            reply = data.get("reply", "Error: no reply")
+            charts = data.get("charts") or []
+            # 分析类问题保证双槽有图:Agent 没调工具 → 端点全兜底;
+            # Agent 只产出一张(如仅柱状图)→ 端点补齐缺失的类型
+            if any(k in message for k in _ANALYSIS_KEYWORDS):
+                fb = _fallback_charts()
+                have = {c.get("type") for c in charts}
+                for c in fb:
+                    if c.get("type") not in have:
+                        charts.append(c)
+            # 按类型路由:bar → 统计图槽,line → 趋势图槽(与标签语义一致)
+            bar_fig = next((_chart_spec_to_fig(c) for c in charts if c.get("type") == "bar"), None)
+            line_fig = next((_chart_spec_to_fig(c) for c in charts if c.get("type") == "line"), None)
     except Exception as e:
         reply = f"请求失败: {e}"
     _last_qa = {"question": message, "reply": reply}
-    return reply
+    return (reply, bar_fig, line_fig)
 
 def feedback_up():
     if _last_qa["question"]:
@@ -261,6 +402,7 @@ def chart_rfm():
         recency = [d["avg_recency"] for d in data]
         freq = [d["avg_frequency"] for d in data]
         mon = [d["avg_monetary"] for d in data]
+        names = _seg_names()
 
         fig, ax = plt.subplots(figsize=(8, 4))
         x = np.arange(len(segs))
@@ -269,13 +411,14 @@ def chart_rfm():
         ax.bar(x, freq, w, label="平均频次", color="#55A868")
         ax.bar(x + w, mon, w, label="平均消费 (¥)", color="#C44E52")
         ax.set_xticks(x)
-        ax.set_xticklabels([f"分群 {s}" for s in segs])
+        ax.set_xticklabels([_seg_label(s, names) for s in segs])
         ax.legend(fontsize=8)
         ax.set_title("各分群RFM对比", fontweight="bold")
         fig.tight_layout()
 
         # Build explanation
         lines = [
+            _freshness_line(),
             "**📖 图表说明：RFM 分群对比**",
             "",
             "横向对比每个用户分群在三个核心维度上的平均值：",
@@ -287,20 +430,21 @@ def chart_rfm():
         # Per-segment summary
         for d in sorted(data, key=lambda x: x["avg_monetary"], reverse=True):
             lines.append(
-                f"- 分群 {d['segment']}：近度 {d['avg_recency']} 天 · "
+                f"- {_seg_label(d['segment'], names)}：近度 {d['avg_recency']} 天 · "
                 f"频次 {d['avg_frequency']} 次 · 消费 ¥{d['avg_monetary']} · "
                 f"共 {d['user_count']} 人"
             )
         return fig, "\n".join(lines)
-    except Exception:
-        return None, "_加载失败_"
+    except Exception as e:
+        return _load_failed(e)
 
 def chart_segment_pie():
     try:
         data = _get("/stats/segment-ratio", params={"force": True})
         if not data:
             return None, "_暂无数据_"
-        labels = [f"分群 {d['segment']}" for d in data]
+        names = _seg_names()
+        labels = [_seg_label(d["segment"], names) for d in data]
         sizes = [d["ratio"] for d in data]
 
         fig, ax = plt.subplots(figsize=(5, 5))
@@ -308,17 +452,18 @@ def chart_segment_pie():
         ax.set_title("分群占比", fontweight="bold")
 
         lines = [
+            _freshness_line(),
             "**📖 图表说明：分群占比**",
             "",
             "展示各分群的用户数量占总体的百分比：",
         ]
         for d in data:
-            lines.append(f"- 分群 {d['segment']}：{d['count']} 人（占比 {d['ratio']}%）")
+            lines.append(f"- {_seg_label(d['segment'], names)}：{d['count']} 人（占比 {d['ratio']}%）")
         lines.append("")
         lines.append("> 💡 理想情况下各分群占比应相对均衡。若某个分群占比过高或过低，建议关注是否需要调整运营策略。")
         return fig, "\n".join(lines)
-    except Exception:
-        return None, "_加载失败_"
+    except Exception as e:
+        return _load_failed(e)
 
 def chart_radar():
     try:
@@ -342,6 +487,7 @@ def chart_radar():
         r_max, f_max, m_max = max(norm["recency"]) or 1, max(norm["frequency"]) or 1, max(norm["monetary"]) or 1
 
         colors = ["#4C72B0", "#55A868", "#C44E52", "#8B5CF6"]
+        names = _seg_names()
         for d in data:
             vals = [
                 d["avg_recency"] / r_max,
@@ -350,7 +496,7 @@ def chart_radar():
             ]
             vals += vals[:1]
             ax.fill(angles, vals, alpha=0.1, color=colors[d["segment"] % len(colors)])
-            ax.plot(angles, vals, "o-", linewidth=2, label=f"分群 {d['segment']}", color=colors[d["segment"] % len(colors)])
+            ax.plot(angles, vals, "o-", linewidth=2, label=_seg_label(d["segment"], names), color=colors[d["segment"] % len(colors)])
 
         ax.set_xticks(angles[:-1])
         ax.set_xticklabels(categories)
@@ -359,6 +505,7 @@ def chart_radar():
         fig.tight_layout()
 
         lines = [
+            _freshness_line(),
             "**📖 图表说明：分群雷达图**",
             "",
             "用雷达图的形式对比各分群在近度、频次、消费三个维度上的综合表现：",
@@ -369,8 +516,44 @@ def chart_radar():
             "> 💡 理想的高价值分群应在三个维度上均衡发展，呈三角形扩张趋势。",
         ]
         return fig, "\n".join(lines)
-    except Exception:
-        return None, "_加载失败_"
+    except Exception as e:
+        return _load_failed(e)
+
+def chart_trend():
+    try:
+        data = _get("/stats/segment-trend", params={"limit": 20})
+        if not data:
+            return None, "_暂无历史快照数据(等 Watcher 轮询几轮后刷新)_"
+        segs = sorted({d["segment"] for d in data})
+        fig, ax = plt.subplots(figsize=(7, 4))
+        colors = ["#4C72B0", "#55A868", "#C44E52", "#8B5CF6"]
+        names = _seg_names()
+        for seg in segs:
+            pts = [d for d in data if d["segment"] == seg]
+            x = [d["timestamp"] for d in pts]
+            y = [d["user_count"] for d in pts]
+            ax.plot(x, y, "o-", linewidth=2, markersize=4,
+                    label=_seg_label(seg, names), color=colors[seg % len(colors)])
+        ax.set_title("分群人数时间趋势(历史快照)", fontweight="bold")
+        ax.set_ylabel("用户数")
+        ax.legend(fontsize=8)
+        for label in ax.get_xticklabels():
+            label.set_rotation(30)
+            label.set_ha("right")
+        fig.tight_layout()
+
+        lines = [
+            _freshness_line(),
+            "**📖 图表说明:分群人数时间趋势**",
+            "",
+            "Watcher 引擎每轮轮询都会保存一份分群快照,本图把快照历史画成时间序列:",
+            "- **上升/下降拐点** = 事件检测的依据(如分群迁移、新用户激增);",
+            "- 数据完全来自磁盘快照,重启不丢失;",
+            "- 演示时可以先去「调试操作台」录入几笔订单,再手动触发事件检测,回到本页刷新即可看到新快照点。",
+        ]
+        return fig, "\n".join(lines)
+    except Exception as e:
+        return _load_failed(e)
 
 def chart_flow():
     try:
@@ -389,13 +572,15 @@ def chart_flow():
             vals = [d.get(tag, 0) for d in data]
             ax.bar(x + i * w, vals, w, label=tag_labels[tag], color=colors.get(tag, "#888"))
 
+        names = _seg_names()
         ax.set_xticks(x + w * 1.5)
-        ax.set_xticklabels([f"分群 {s}" for s in segs])
+        ax.set_xticklabels([_seg_label(s, names) for s in segs])
         ax.legend(fontsize=8)
         ax.set_title("各分群流转分布", fontweight="bold")
         fig.tight_layout()
 
         lines = [
+            _freshness_line(),
             "**📖 图表说明：各分群流转分布**",
             "",
             "展示每个分群内用户的流转状态构成。流转标签含义：",
@@ -407,8 +592,8 @@ def chart_flow():
             "> 💡 关注各分群的流失/沉默用户占比。高价值分群若流失比例较高，建议优先执行召回策略。",
         ]
         return fig, "\n".join(lines)
-    except Exception:
-        return None, "_加载失败_"
+    except Exception as e:
+        return _load_failed(e)
 
 # ── Build UI ───────────────────────────────────────────────────
 
@@ -422,10 +607,36 @@ def create_ui():
         # ════════════════════════════════════════════════════════
         with gr.Tab("💬 AI 对话"):
             gr.Markdown("向 AI 助手询问用户分群信息，所有回答附带反馈按钮。")
-            chat = gr.ChatInterface(
-                fn=chat_fn,
-                chatbot=gr.Chatbot(height=450),
-            )
+            chat = gr.Chatbot(height=380, label="对话")
+            with gr.Row():
+                chat_input = gr.Textbox(
+                    label="问题", scale=4,
+                    placeholder="如：各分群的人数是多少？/ 分群人数趋势怎么样？",
+                )
+                chat_send = gr.Button("发送", variant="primary", scale=1)
+                chat_clear = gr.Button("清空对话", size="sm", scale=1)
+            with gr.Row():
+                chat_plot1 = gr.Plot(label="📊 分群统计图(分析类问题自动出图)")
+                chat_plot2 = gr.Plot(label="📈 分群趋势图(问'趋势'类问题出图)")
+
+            def chat_submit(message, history):
+                if not message or not message.strip():
+                    return history, "", None, None
+                reply, bar_fig, line_fig = chat_fn(message, history)
+                # Gradio 6 Chatbot 只接受 {"role","content"} 字典格式(旧 tuple 格式会报错)
+                history = (history or []) + [
+                    {"role": "user", "content": message},
+                    {"role": "assistant", "content": reply},
+                ]
+                return history, "", bar_fig, line_fig
+
+            chat_send.click(chat_submit,
+                            [chat_input, chat],
+                            [chat, chat_input, chat_plot1, chat_plot2])
+            chat_input.submit(chat_submit,
+                              [chat_input, chat],
+                              [chat, chat_input, chat_plot1, chat_plot2])
+            chat_clear.click(lambda: [], outputs=chat)
             with gr.Row():
                 btn_up = gr.Button("👍", size="sm", scale=0)
                 btn_down = gr.Button("👎", size="sm", scale=0)
@@ -589,6 +800,37 @@ def create_ui():
                     ignore_btn = gr.Button("忽略任务")
                     task_action_msg = gr.Textbox(label="结果", interactive=False)
 
+            # ── 任务详情(三阶段多 Agent 报告)──
+            with gr.Row():
+                detail_id = gr.Number(label="任务ID(查看详情)", value=1, precision=0)
+                detail_btn = gr.Button("查看任务详情", variant="secondary")
+            task_detail_display = gr.Markdown("_输入任务 ID 查看报告(HIGH 事件为 Monitor→Analysis→Strategy 三段式)_")
+
+            def show_task_detail(task_id):
+                try:
+                    import json as _json
+                    data = _get(f"/tasks/{int(task_id)}")
+                    stages = data.get("stage_results")
+                    if isinstance(stages, str):
+                        try:
+                            stages = _json.loads(stages)
+                        except Exception:
+                            stages = None
+                    if stages and stages.get("monitor"):
+                        return "\n".join([
+                            "## 🔭 Monitor 监测报告", "", stages.get("monitor", ""),
+                            "", "---", "",
+                            "## 🔬 Analysis 根因分析", "", stages.get("analysis", ""),
+                            "", "---", "",
+                            "## 💡 Strategy 运营策略", "", stages.get("strategy", ""),
+                        ])
+                    rt = data.get("result_text") or "_(任务尚无结果)_"
+                    return f"### 任务 {task_id}(单 Agent 路径)\n\n{rt[:4000]}"
+                except Exception as e:
+                    return f"_加载失败: {e}_"
+
+            detail_btn.click(show_task_detail, detail_id, task_detail_display)
+
             gr.Markdown("### 数据可视化")
             with gr.Row():
                 rfm_plot = gr.Plot(label="RFM 分群对比")
@@ -602,12 +844,38 @@ def create_ui():
             with gr.Row():
                 radar_desc = gr.Markdown()
                 flow_desc = gr.Markdown()
+            with gr.Row():
+                trend_plot = gr.Plot(label="分群人数时间趋势")
+                trend_desc = gr.Markdown()
+
+            gr.Markdown("### 智能运营建议")
+            with gr.Row():
+                suggest_btn = gr.Button("💡 生成运营建议", variant="primary")
+            suggest_display = gr.Markdown(
+                "_点击按钮，LLM 基于上方图表同源数据生成分群级运营建议，"
+                "并经过数值核查（防编造数字）。_"
+            )
+
+            def show_suggestions():
+                try:
+                    data = _get("/api/suggestions")
+                    if isinstance(data, dict) and "detail" in data:
+                        return f"_生成失败: {data['detail']}_"
+                    md = data.get("suggestions") or "_(无内容)_"
+                    if not data.get("grounded", False):
+                        n = data.get("violations", 0)
+                        md += f"\n\n> ⚠️ 建议文本中有 {n} 处数字未通过核查，请以上方图表数据为准。"
+                    return md
+                except Exception as e:
+                    return f"_生成失败: {e}_"
 
             refresh_btn.click(monitor_list_tasks, outputs=task_table)
             refresh_btn.click(chart_rfm, outputs=[rfm_plot, rfm_desc])
             refresh_btn.click(chart_segment_pie, outputs=[pie_plot, pie_desc])
             refresh_btn.click(chart_radar, outputs=[radar_plot, radar_desc])
             refresh_btn.click(chart_flow, outputs=[flow_plot, flow_desc])
+            refresh_btn.click(chart_trend, outputs=[trend_plot, trend_desc])
+            suggest_btn.click(show_suggestions, outputs=suggest_display)
             retry_btn.click(monitor_retry_task, retry_id, task_action_msg)
             ignore_btn.click(monitor_ignore_task, retry_id, task_action_msg)
 
@@ -645,6 +913,7 @@ def create_ui():
             )
 
             def refresh_observability():
+                import pandas as pd
                 try:
                     stats = _get("/stats/observability")
                     if not stats or stats.get("total_requests", 0) == 0:
@@ -662,7 +931,6 @@ def create_ui():
                             "核查": "pass" if r.get("fact_ok") else ("fail" if r.get("fact_ok") is False else "—"),
                             "错误": r.get("error", "")[:30],
                         })
-                    import pandas as pd
                     df = pd.DataFrame(recent_rows) if recent_rows else pd.DataFrame({
                         "提示": ["暂无数据"]
                     })
@@ -683,7 +951,6 @@ def create_ui():
                         df,
                     )
                 except Exception as e:
-                    import pandas as pd
                     return (0, 0, 0, 0, "—", "—", "—", "—", "—", "—", "—", "—",
                             pd.DataFrame({"错误": [str(e)]}))
 

@@ -79,16 +79,20 @@ flowchart TB
 ## 快速启动
 
 ```bash
-# 一键启动（Windows）
+# 一键启动（Windows）——双击 start.bat:自动拉起 3 个服务,就绪后自动打开浏览器进入商城,启动窗口自动关闭
 start.bat
 
 # 或手动启动
 uv sync                                     # 1. 安装依赖
-ollama pull qwen2.5:7b nomic-embed-text     # 2. 拉取模型（需先装 Ollama）
+ollama pull qwen2.5:7b nomic-embed-text     # 2. 拉取模型（本地兜底；云端主链路见下）
 python run_api.py                           # 3. FastAPI → :8000
 python app.py                               # 4. Gradio → :7860
 cd frontend && npm install && npm run dev   # 5. Vue → :5173
 ```
+
+> 🌩️ **云端主链路(可选)**:在 `.env` 配 `DASHSCOPE_API_KEY` / `DEEPSEEK_API_KEY` / `QIANFAN_API_KEY`
+> 任一即可,未配 Key 的供应商自动跳过,全部失败自动降级本地 Ollama。
+> 全本地调试:`LLM_PROVIDER_PRIMARY=ollama`。密钥模板见 [.env.example](.env.example)。
 
 ---
 
@@ -97,7 +101,7 @@ cd frontend && npm install && npm run dev   # 5. Vue → :5173
 | 层 | 技术 |
 |----|------|
 | Agent 框架 | LangGraph 1.2 + LangChain 1.3 |
-| LLM | qwen2.5:7b (Ollama, function-calling) |
+| LLM | **统一适配器**:qwen3.8-max / deepseek-chat / ernie-bot-4.0(云端主链路,自动降级链)+ Ollama 本地兜底 |
 | Embedding | nomic-embed-text (768-dim) |
 | 稀疏检索 | BM25 + jieba 分词 |
 | API | FastAPI + Pydantic v2 |
@@ -130,11 +134,50 @@ Gradio 内置 Trace 面板，每次对话的 6 节点执行链路：耗时、Tok
 
 ### 5. 事件驱动自主分析
 
-Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷却 → 自动触发 Agent 分析。
+Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷却 → 自动触发分析:
+**HIGH 事件走 Monitor→Analysis→Strategy 三阶段多 Agent 流水线**(结果三段落库,管理台可查),
+普通事件单 Agent;分群历史快照画成时间趋势图,监测结果随时间可见。
 
 ### 6. 数据飞轮
 
 用户反馈 + 自动评分 → 向量入库 → 检索反哺 Agent 系统提示 → 回答质量越用越好。
+
+### 7. 统一大模型适配器(与康养 RAG 项目共用)
+
+超时 / 429(按 Retry-After 退避)/ 额度不足 / 鉴权 / 上下文超长(截断重试)错误分类驱动
+**多供应商自动降级链**:DashScope → DeepSeek → 千帆 → Ollama,未配 Key 自动跳过。
+经 LangChain Bridge 接入 LangGraph(`llm/bridge.py`),工具绑定语义与降级链同时生效;
+token 用量全链采集,Agent Trace 的节点耗时全部实测。
+
+### 8. SSE 真流式 + 逐步工具展示
+
+`POST /ask/stream` 实时推送每个图节点:意图识别 → 模型决策(token 级打字机)→
+工具调用(名称/入参/耗时)→ 数据校验 → 事实核查 → 权威全文。
+Vue 前端步骤条实时渲染执行过程。
+
+### 9. 输入输出防护
+
+规则式 Prompt 注入检测(加权拦截)+ 百度内容审核双向校验(fail-open 不阻断主链路)+
+`/debug/*` 演示级 Api-Key 鉴权。
+
+### 10. 会话记忆持久化 + 长对话摘要
+
+JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自动恢复(实测重启后
+仍记得历史对话);消息数超阈值自动压缩为要点摘要,上下文保持有界;过期会话按 TTL 清理。
+
+### 11. 个性化推荐闭环
+
+商品图像解析标签 → 用户画像偏好 → `get_personal_recommendations` Skill 打分推荐
+(品类匹配/标签命中/价格适配消费力);推荐与搜索结果以结构化商品列表透出,
+前端渲染**商品卡片 + 一键加购**,AI 导购从文字变交互。
+
+### 12. 运营友好型分析体验
+
+**分群业务命名**(LLM 按分群特征命名 + 确定性启发式兜底,缓存复用):对话、图表、
+运营建议、环比对比全链路说人话("高价值核心用户"而非"分群2");
+**对话内直接出图**:分析类 Skill 的结构化数据透出为 chart 协议,前端零依赖 SVG 渲染;
+**环比对比 Skill**:`get_segment_growth` 支持指定月份("2月 vs 3月"),无快照时诚实提示可用月份;
+**数据新鲜度标注**:图表注明数据时间/数据源/采样口径。
 
 ---
 
@@ -144,8 +187,9 @@ Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷
 |------|------|------|
 | AI | `POST /ask` | Agent 问答 |
 | 电商 | `/api/products`, `/api/cart`, `/api/orders` | Vue 商城后端 |
+| 推荐 | `GET /api/recommendations`, `POST /api/product-image/analyze` | 画像推荐 / 商品图像解析(VL) |
 | 调试 | `/debug/*` | CRUD + 数据重置 + 事件触发 |
-| 统计 | `/stats/rfm`, `/stats/segment-ratio`, `/stats/flow` | 图表数据 |
+| 统计 | `/stats/rfm`, `/stats/segment-ratio`, `/stats/flow`, `/stats/segment-trend` | 图表数据(含分群时间趋势) |
 | Trace | `GET /traces`, `GET /traces/{id}` | Agent 执行链路 |
 | 任务 | `GET /tasks/` | 自主分析任务管理 |
 | 健康 | `GET /health`, `GET /health/full` | 服务状态 |
@@ -164,10 +208,12 @@ Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷
 ├── watcher/        # 事件检测 + CDC + 任务管理
 ├── flywheel/       # 数据飞轮（采集 → 评分 → BM25+Milvus 检索）
 ├── eval/           # 自动化评测（25 QA + 10 Event + LLM-Judge）
-├── llm/            # LLM 客户端（连接池 + 重试 + Token 统计）
+├── llm/            # 统一适配器（adapter.py）+ LangChain 桥接（bridge.py）+ 旧客户端
+├── common/         # 公共工具（json_repair / guardrails / content_moderation）
 ├── config/         # Pydantic-settings 配置中心
 ├── log/            # JSON 结构化日志
-├── tests/          # 66 单元测试
+├── tests/          # 122 项测试(纯函数 + Agent 图 + API 集成 + 会话持久化)
+├── docs/           # 数据合规说明（DATA_COMPLIANCE.md）
 ├── frontend/       # Vue 3 电商商城
 ├── app.py          # Gradio 管理台（5 Tab）
 └── run_api.py      # FastAPI 启动入口

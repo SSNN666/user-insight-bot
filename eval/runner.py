@@ -25,6 +25,35 @@ class EvalRunner:
         self.qa_results: list[QAResult] = []
         self.event_results: list[EventResult] = []
 
+    def _read_tools_from_trace(self, client: httpx.Client, session_id: str) -> list[str]:
+        """从 /traces/{session_id} 读真实工具调用名(tools span 的 metadata.tool_calls)。"""
+        try:
+            resp = client.get(f"{self.api_url}/traces/{session_id}", timeout=30)
+            if resp.status_code != 200:
+                return []
+            spans = resp.json().get("spans", [])
+            for s in spans:
+                if s.get("node") == "tools":
+                    return list(s.get("meta", {}).get("tool_calls", []))
+        except Exception:
+            pass
+        return []
+
+    @staticmethod
+    def _guess_tools_by_keywords(reply: str) -> list[str]:
+        """关键词启发式兜底(仅当 Trace 不可用时使用,准确性低于 Trace)。"""
+        tools_called: list[str] = []
+        tool_keywords = {
+            "get_user_segment_stats": ["用户数", "平均近度", "平均频次", "平均消费"],
+            "get_segment_rules": ["|---", "class:", "recency <="],
+            "get_high_value_users": ["user_id", "高价值用户"],
+            "refresh_pipeline": ["刷新", "缓存已刷新"],
+        }
+        for tool_name, keywords in tool_keywords.items():
+            if any(kw in reply for kw in keywords):
+                tools_called.append(tool_name)
+        return tools_called
+
     # ── Q&A Suite ───────────────────────────────────────────
 
     def run_qa_suite(self, test_set: list[dict] | None = None) -> list[QAResult]:
@@ -50,20 +79,11 @@ class EvalRunner:
                 data = resp.json() if resp.status_code == 200 else {}
                 reply = data.get("reply", f"HTTP {resp.status_code}")
 
-                # Tool accuracy: we can't reliably detect which tools were called
-                # from the API response alone. Use heuristic: if expected tool keywords
-                # appear in the reply, consider it a hit. For a full implementation,
-                # integrate with agent state inspection.
-                tools_called: list[str] = []
-                tool_keywords = {
-                    "get_user_segment_stats": ["用户数", "平均近度", "平均频次", "平均消费"],
-                    "get_segment_rules": ["|---", "class:", "recency <="],
-                    "get_high_value_users": ["user_id", "高价值用户"],
-                    "refresh_pipeline": ["刷新", "缓存已刷新"],
-                }
-                for tool_name, keywords in tool_keywords.items():
-                    if any(kw in reply for kw in keywords):
-                        tools_called.append(tool_name)
+                # Tool accuracy: 优先从 Agent Trace 读真实工具名(tools span 的
+                # metadata.tool_calls);Trace 缺失时回退关键词启发式(兼容旧行为)。
+                tools_called = self._read_tools_from_trace(client, f"eval-{qid}")
+                if not tools_called:
+                    tools_called = self._guess_tools_by_keywords(reply)
 
                 tool_hits = len(set(tools_called) & expected_tools)
                 tool_total = len(expected_tools)

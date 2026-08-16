@@ -136,10 +136,20 @@ class UserSegmentStatsSkill(BaseSkill):
         try:
             _, segments, _ = _load_and_process()
             summary_df = segment_summary(segments)
+            summary = "用户分群统计:\n" + summary_df.to_markdown(index=False)
+            try:
+                from pipeline.segment_naming import get_segment_names
+                names = get_segment_names(segments)
+                if names:
+                    summary += "\n分群业务命名: " + ", ".join(
+                        f"分群{k}({v})" for k, v in sorted(names.items())
+                    )
+            except Exception:
+                pass
             return SkillResult(
                 status=SkillStatus.SUCCESS,
                 data=summary_df.to_dict(orient="records"),
-                summary="用户分群统计:\n" + summary_df.to_markdown(index=False),
+                summary=summary,
                 confidence=0.95,
             )
         except (DatabaseError, ComputationError) as e:
@@ -199,18 +209,43 @@ class HighValueUsersSkill(BaseSkill):
             return SkillResult(status=SkillStatus.ERROR, error=str(e), confidence=0.0)
 
 
+class SegmentGrowthInput(BaseModel):
+    period1: str = Field(default="", description="起始月份(YYYY-MM),如'2016-02';空=倒数第二个快照")
+    period2: str = Field(default="", description="结束月份(YYYY-MM),如'2016-03';空=最近快照")
+
+
+def _pick_snapshot_periods(snaps: list, p1: str, p2: str):
+    """按月份前缀挑两个快照(取该月最后一个);p 为空时用最近两期。"""
+    if not p1 and not p2:
+        return snaps[-2], snaps[-1], ""
+    if not p1 or not p2:
+        return None, None, "对比需要同时指定两个月份(period1/period2),或都不指定(对比最近两期)"
+
+    def _find(prefix: str):
+        matched = [s for s in snaps if s.timestamp.startswith(prefix)]
+        return matched[-1] if matched else None
+
+    s1, s2 = _find(p1), _find(p2)
+    if s1 is None or s2 is None:
+        available = sorted({s.timestamp[:7] for s in snaps})
+        return None, None, f"指定月份无快照(现有: {available});请换月份或用默认的最近两期对比"
+    return s1, s2, ""
+
+
 class SegmentGrowthSkill(BaseSkill):
     name = "get_segment_growth"
     description = (
-        "获取各用户分群的环比增长指标：销售额增长百分比、转化率变化、GMV提升比例。"
-        "对比最近两次快照数据，输出专业的分群对比分析表。"
-        "适用于需要了解各分群增长趋势和商业价值的场景。"
+        "获取各用户分群的环比增长指标:销售额增长、转化率变化、GMV提升、人数与平均消费变化。"
+        "对比两个时间段的快照;默认最近两期,可用 period1/period2 指定月份(如 '2016-02' vs '2016-03')。"
+        "适用于'2月比3月怎么样'这类环比对比问题。"
     )
+    input_schema = SegmentGrowthInput
 
-    def execute(self) -> SkillResult:
+    def execute(self, **kwargs) -> SkillResult:
         try:
-            from pipeline.user_segmentation import load_snapshots
+            from pipeline.user_segmentation import load_snapshots, compare_snapshots
             from pipeline.profile import compute_segment_growth
+            from pipeline.segment_naming import get_segment_names
 
             # Ensure pipeline is computed (creates initial snapshot if needed)
             _load_and_process(force_refresh=False)
@@ -233,64 +268,73 @@ class SegmentGrowthSkill(BaseSkill):
                     confidence=0.3,
                 )
 
-            prev = snaps[-2]
-            curr = snaps[-1]
-            growth = compute_segment_growth(prev.segment_stats, curr.segment_stats)
+            prev, curr, err = _pick_snapshot_periods(
+                snaps, (kwargs.get("period1") or "").strip(),
+                (kwargs.get("period2") or "").strip(),
+            )
+            if err:
+                return SkillResult(status=SkillStatus.PARTIAL, data=[], summary=err, confidence=0.3)
 
-            # Build professional comparison table
+            growth = compute_segment_growth(prev.segment_stats, curr.segment_stats)
+            deltas = compare_snapshots(prev, curr)
+            names = get_segment_names()
+
+            for g in growth:
+                d = deltas.get(g["segment"], {})
+                g["user_count_delta"] = d.get("user_count_delta", 0)
+                g["avg_monetary_delta"] = d.get("avg_monetary_delta", 0)
+
+            def _label(seg):
+                return names.get(int(seg), f"分群{seg}")
+
             table_lines = [
-                "## 高价值用户分群对比分析表",
+                f"## 分群环比对比( {prev.timestamp[:10]} → {curr.timestamp[:10]} )",
                 "",
-                "| 分群 | 销售额增长百分比（%） | 转化率变化（%） | GMV提升比例（%） | 用户数 | 人均消费 |",
-                "|------|------------------------|-----------------|------------------|--------|----------|",
+                "| 分群 | 销售额增长(%) | 转化率变化(%) | GMV提升(%) | 用户数 | 人均消费 | 人数变化 |",
+                "|------|--------------|--------------|-----------|--------|----------|---------|",
             ]
             for g in growth:
                 table_lines.append(
-                    f"| {g['segment']} | {g['sales_growth_pct']:+.1f} | "
+                    f"| {_label(g['segment'])} | {g['sales_growth_pct']:+.1f} | "
                     f"{g['conversion_change_pct']:+.1f} | {g['gmv_lift_pct']:+.1f} | "
-                    f"{g['user_count']} | ¥{g['avg_monetary']:.2f} |"
+                    f"{g['user_count']} | ¥{g['avg_monetary']:.2f} | {g['user_count_delta']:+.0f} |"
+                )
+
+            # 环比明细(供 Agent 引用,数字来自 compare_snapshots,可被数值核查)
+            table_lines.append("")
+            table_lines.append("### 分群明细变化")
+            for g in growth:
+                table_lines.append(
+                    f"- {_label(g['segment'])}: 人数 {g['user_count'] - g['user_count_delta']:.0f} → "
+                    f"{g['user_count']:.0f} ({g['user_count_delta']:+.0f}), "
+                    f"平均消费 {g['avg_monetary'] - g['avg_monetary_delta']:.2f} → "
+                    f"{g['avg_monetary']:.2f} ({g['avg_monetary_delta']:+.2f})"
                 )
 
             # Data commentary
             table_lines.append("")
             table_lines.append("### 数据说明")
-
-            # Find best in each metric
             best_sales = max(growth, key=lambda x: x['sales_growth_pct'])
             best_gmv = max(growth, key=lambda x: x['gmv_lift_pct'])
-            best_conv = max(growth, key=lambda x: x['conversion_change_pct'])
-
             table_lines.append(
-                f"- **分群 {best_sales['segment']}** 表现出最佳的销售额增长"
-                f"（{best_sales['sales_growth_pct']:+.1f}%），"
-                f"表明其高价值用户在购买频率和总交易金额上有显著优势。"
+                f"- **{_label(best_sales['segment'])}** 的销售额增长最突出"
+                f"（{best_sales['sales_growth_pct']:+.1f}%）。"
             )
             table_lines.append(
-                f"- **分群 {best_conv['segment']}** 的转化率变化最为突出"
-                f"（{best_conv['conversion_change_pct']:+.1f}%），"
-                f"可重点关注其转化路径优化。"
+                f"- **{_label(best_gmv['segment'])}** 的 GMV 提升比例最高"
+                f"（{best_gmv['gmv_lift_pct']:+.1f}%），是最具商业增长潜力的群体。"
             )
-            table_lines.append(
-                f"- **分群 {best_gmv['segment']}** 的 GMV 提升比例最高"
-                f"（{best_gmv['gmv_lift_pct']:+.1f}%），"
-                f"是最具商业增长潜力的群体。"
-            )
-
-            # Full explanation for flat/negative segments
             flat_segs = [g for g in growth if g['conversion_change_pct'] < 0]
             if flat_segs:
-                names = "、".join(str(g['segment']) for g in flat_segs)
                 table_lines.append(
-                    f"- 分群 {names} 的转化率出现负增长，"
-                    f"建议排查用户流失原因并制定针对性挽回策略。"
+                    f"- { '、'.join(_label(g['segment']) for g in flat_segs) } 的转化率负增长，"
+                    f"建议排查流失原因并制定挽回策略。"
                 )
-
-            summary_text = "\n".join(table_lines)
 
             return SkillResult(
                 status=SkillStatus.SUCCESS,
                 data=growth,
-                summary=summary_text,
+                summary="\n".join(table_lines),
                 confidence=0.92,
             )
         except (DatabaseError, ComputationError) as e:
@@ -421,6 +465,60 @@ class RefreshPipelineSkill(BaseSkill):
 
 # ── Registration helper ─────────────────────────────────────────
 
+class SegmentTrendSkill(BaseSkill):
+    name = "get_segment_trend"
+    description = (
+        "获取各分群人数随时间的变化趋势(历史快照时间序列)。"
+        "返回每个快照时间点各分群的人数与平均消费。"
+        "适用于'分群人数趋势''最近分群有什么变化'类问题。"
+    )
+
+    def execute(self) -> SkillResult:
+        try:
+            from pipeline.user_segmentation import load_snapshots
+            from pipeline.segment_naming import get_segment_names
+
+            _load_and_process(force_refresh=False)
+            snaps = load_snapshots()
+            if len(snaps) < 2:
+                return SkillResult(
+                    status=SkillStatus.PARTIAL, data=[],
+                    summary="快照不足(需≥2个),等 Watcher 轮询几轮后再问趋势。",
+                    confidence=0.3,
+                )
+
+            # 结构化时序行(前端折线图直接消费)
+            rows = []
+            for s in snaps[-10:]:
+                ts = s.timestamp[:16].replace("T", " ")
+                for sid in sorted(s.segment_stats.keys()):
+                    st = s.segment_stats[sid]
+                    rows.append({
+                        "timestamp": ts,
+                        "segment": int(sid),
+                        "user_count": st.get("user_count", 0),
+                        "avg_monetary": round(st.get("avg_monetary", 0), 2),
+                    })
+
+            # 摘要:首末快照的每分群人数变化(业务名标注)
+            first, last = snaps[0], snaps[-1]
+            lines = [
+                f"分群人数趋势(快照 {len(snaps)} 个,"
+                f"{first.timestamp[:10]} → {last.timestamp[:10]}):",
+            ]
+            names = get_segment_names()
+            for sid in sorted(last.segment_stats.keys()):
+                n0 = first.segment_stats.get(sid, {}).get("user_count", 0)
+                n1 = last.segment_stats.get(sid, {}).get("user_count", 0)
+                label = names.get(int(sid), f"分群{sid}")
+                lines.append(f"- {label}: {n0} → {n1} 人 ({n1 - n0:+})")
+            return SkillResult(
+                status=SkillStatus.SUCCESS, data=rows,
+                summary="\n".join(lines), confidence=0.9,
+            )
+        except (DatabaseError, ComputationError) as e:
+            return SkillResult(status=SkillStatus.ERROR, error=str(e), confidence=0.0)
+
 
 def register_all_skills() -> None:
     """Register all built-in skills with the global registry."""
@@ -435,5 +533,14 @@ def register_all_skills() -> None:
     SkillRegistry.register(UserSegmentRulesSkill())
     SkillRegistry.register(HighValueUsersSkill())
     SkillRegistry.register(SegmentGrowthSkill())
+    SkillRegistry.register(SegmentTrendSkill())
     SkillRegistry.register(RefreshPipelineSkill())
+
+    # ── VL 扩展:商品图像解析(不进 Agent 工具绑定名单,由上传接口直接调用)──
+    from skills.product_image import ProductImageSkill
+    SkillRegistry.register(ProductImageSkill())
+
+    # ── 个性化推荐(画像驱动,进入分析模式工具集)──
+    from skills.recommend import PersonalRecommendationSkill
+    SkillRegistry.register(PersonalRecommendationSkill())
     logger.info("all_skills_registered")

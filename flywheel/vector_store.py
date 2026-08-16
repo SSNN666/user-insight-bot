@@ -71,23 +71,6 @@ def _embed_cache_key(text: str, dim: int) -> str:
     return f"{digest}:{dim}"
 
 
-@lru_cache(maxsize=512)
-def _cached_embed_full(key: str) -> list[float] | None:
-    """Cached embedding computation.  key = _embed_cache_key(text, dim).
-
-    Returns None when Ollama is unavailable (triggers bigram fallback).
-    Because lru_cache caches None, we don't retry failed Ollama calls for
-    the same text within the cache lifetime.
-    """
-    # key format: "sha256hex:dim"
-    parts = key.rsplit(":", 1)
-    dim = int(parts[1])
-    # We don't have the original text, so this is a design trade-off:
-    # the caller passes the key and the text separately.
-    # See embed_text() below for the actual flow.
-    raise NotImplementedError("use embed_text() instead")
-
-
 def embed_text(text: str, dim: int = _dim()) -> list[float]:
     """Primary embedding function with LRU cache + automatic fallback.
 

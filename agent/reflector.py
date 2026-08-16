@@ -68,8 +68,6 @@ def reflect(
     Returns:
         ``ReflectResult`` with completeness / conflict / confidence assessment.
     """
-    import json
-
     # Build context for the judge
     results_text = "\n---\n".join([
         f"Tool {i+1}: {r.to_context_string()}"
@@ -88,44 +86,48 @@ def reflect(
         {"role": "user", "content": prompt},
     ]
 
+    # Conservative fallback: assume complete to avoid infinite loops
+    _DEFAULT = {
+        "is_complete": True,
+        "has_conflict": False,
+        "missing_info": [],
+        "conflict_details": "",
+        "suggestion": "",
+        "confidence": 0.5,
+    }
+
     try:
         response = llm.invoke(messages)
-        raw = response.content.strip()
-
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        data = json.loads(raw)
-        result = ReflectResult(
-            is_complete=data.get("is_complete", True),
-            has_conflict=data.get("has_conflict", False),
-            missing_info=data.get("missing_info", []),
-            conflict_details=data.get("conflict_details", ""),
-            suggestion=data.get("suggestion", ""),
-            confidence=data.get("confidence", 1.0),
+        from common.json_repair import load_json_or_default
+        data, repair = load_json_or_default(
+            response.content,
+            default=_DEFAULT,
+            llm=llm, retry_messages=messages,
+            hint='{"is_complete":true/false,"has_conflict":true/false,"missing_info":["..."],"conflict_details":"...","suggestion":"...","confidence":0.0-1.0}',
+            logger=logger,
         )
+        try:
+            result = ReflectResult(
+                is_complete=data.get("is_complete", True),
+                has_conflict=data.get("has_conflict", False),
+                missing_info=data.get("missing_info", []),
+                conflict_details=data.get("conflict_details", ""),
+                suggestion=data.get("suggestion", ""),
+                confidence=data.get("confidence", 1.0),
+            )
+        except Exception as e:
+            # confidence 越界等校验失败 → 保守兜底
+            logger.warning("reflect_validate_failed", extra={"error": str(e)})
+            result = ReflectResult(**_DEFAULT)
         logger.info("reflect_done", extra={
             "is_complete": result.is_complete,
             "has_conflict": result.has_conflict,
             "confidence": result.confidence,
+            "repaired": repair.repaired,
+            "retries": repair.retries,
         })
         return result
 
-    except (json.JSONDecodeError, KeyError) as e:
-        logger.warning("reflect_parse_failed", extra={"error": str(e)})
-        # Conservative fallback: assume complete to avoid infinite loops
-        return ReflectResult(
-            is_complete=True,
-            has_conflict=False,
-            confidence=0.5,
-        )
     except Exception as e:
         logger.error("reflect_error", extra={"error": str(e)})
-        return ReflectResult(
-            is_complete=True,
-            has_conflict=False,
-            confidence=0.5,
-        )
+        return ReflectResult(**_DEFAULT)

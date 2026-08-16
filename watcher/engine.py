@@ -183,7 +183,20 @@ class WatcherEngine:
     async def _run_task(
         self, task_rec, query: str, session_id: str, max_rounds: int,
     ) -> None:
-        """Shared dispatch implementation: semaphore → thread pool → agent."""
+        """Dispatch: HIGH 事件走三阶段多 Agent 流水线,其余走单 Agent。
+
+        Orchestrator(Monitor→Analysis→Strategy)只对高优先级业务异常启用——
+        普通波动事件单 Agent 足够,三阶段串行会放大延迟与成本。
+        """
+        if getattr(task_rec, "priority", "") == "high":
+            await self._run_orchestrated(task_rec, query, session_id)
+        else:
+            await self._run_single(task_rec, query, session_id, max_rounds)
+
+    async def _run_single(
+        self, task_rec, query: str, session_id: str, max_rounds: int,
+    ) -> None:
+        """单 Agent 派发(原有路径):semaphore → thread pool → agent。"""
         settings = get_settings()
 
         self.task_manager.set_running(task_rec.id)
@@ -212,13 +225,70 @@ class WatcherEngine:
                     "task_id": task_rec.id, "error": str(exc),
                 })
 
+    async def _run_orchestrated(
+        self, task_rec, query: str, session_id: str,
+    ) -> None:
+        """三阶段多 Agent 流水线(Monitor→Analysis→Strategy),结果三段落库。"""
+        settings = get_settings()
+
+        self.task_manager.set_running(task_rec.id)
+
+        loop = asyncio.get_event_loop()
+        async with self._llm_semaphore:
+            try:
+                stages: dict = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self._thread_pool,
+                        _run_orchestrator_sync,
+                        query, session_id,
+                    ),
+                    timeout=settings.ORCHESTRATOR_TASK_TIMEOUT_SECONDS,
+                )
+                combined = (
+                    f"## 🔭 监测报告\n\n{stages['monitor_result']}\n\n"
+                    f"## 🔬 根因分析\n\n{stages['analysis_result']}\n\n"
+                    f"## 💡 运营策略\n\n{stages['strategy_result']}"
+                )
+                self.task_manager.set_completed_with_stages(
+                    task_rec.id, combined, 3, {
+                        "trace_id": stages.get("trace_id", ""),
+                        "monitor": stages["monitor_result"],
+                        "analysis": stages["analysis_result"],
+                        "strategy": stages["strategy_result"],
+                    },
+                )
+                logger.info("task_orchestrated", extra={
+                    "task_id": task_rec.id,
+                    "trace_id": stages.get("trace_id", ""),
+                })
+            except asyncio.TimeoutError:
+                self.task_manager.set_timeout(task_rec.id)
+                logger.warning("task_timeout", extra={"task_id": task_rec.id})
+            except Exception as exc:
+                self.task_manager.set_failed(task_rec.id, str(exc))
+                logger.error("task_failed", extra={
+                    "task_id": task_rec.id, "error": str(exc),
+                })
+
 
 def _invoke_agent_sync(
     query: str, session_id: str, check_mode: str, max_rounds: int,
 ) -> tuple[str, int]:
     """Synchronous wrapper for the agent invocation (runs in thread)."""
     from agent.agent import _ask_agent_internal
-    return _ask_agent_internal(query, session_id, check_mode, max_rounds)
+    reply, rounds, _, _ = _ask_agent_internal(query, session_id, check_mode, max_rounds)
+    return reply, rounds
+
+
+def _run_orchestrator_sync(query: str, session_id: str) -> dict:
+    """Synchronous wrapper for the three-stage orchestrator (runs in thread).
+
+    Returns:
+        {"trace_id": str, "monitor_result": str, "analysis_result": str,
+         "strategy_result": str, "elapsed_seconds": float}
+    """
+    from agent.orchestrator import get_orchestrator
+    return get_orchestrator().run_pipeline(query)
 
 
 # ── Singleton ───────────────────────────────────────────────────

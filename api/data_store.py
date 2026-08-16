@@ -159,6 +159,28 @@ def update_user(uid: int, city: str | None = None, age: int | None = None) -> di
     return u
 
 
+def add_user_preference(uid: int, tags: dict) -> dict | None:
+    """把商品图像解析标签并入用户偏好(支撑个性化推荐)。
+
+    tags: {"category": str, "appearance": str, "tags": [str], ...}
+    列表类字段按去重追加,标量字段覆盖。
+    """
+    u = _users_by_id.get(uid)
+    if u is None:
+        return None
+    with _lock:
+        prefs = u.setdefault("preferences", {})
+        for k, v in (tags or {}).items():
+            if isinstance(v, list):
+                cur = prefs.setdefault(k, [])
+                for item in v:
+                    if item not in cur:
+                        cur.append(item)
+            else:
+                prefs[k] = v
+    return u
+
+
 def list_users() -> list[dict]:
     return list(_users_by_id.values())
 

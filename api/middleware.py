@@ -5,6 +5,7 @@ ExceptionHandlerMiddleware (standardized JSON errors).
 """
 
 import hashlib
+import json
 import time
 import traceback
 from collections import deque
@@ -75,7 +76,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if not request.url.path.startswith("/ask"):
             return await call_next(request)
 
-        session_id = request.headers.get("X-Session-ID", "default")
+        # ── 读 body 一次:session 分桶 + 相似问题去重共用 ──
+        # 修复:此前按 X-Session-ID header 分桶,但所有客户端只传 body 的
+        # session_id → 全站共享一个限流桶。现从 body 取 session(回退 header)。
+        body = await request.body()
+        request._body = body   # 恢复 body 供下游读取
+
+        session_id = ""
+        if body:
+            try:
+                session_id = json.loads(body.decode("utf-8", "ignore")).get("session_id", "") or ""
+            except Exception:
+                session_id = ""
+        session_id = session_id or request.headers.get("X-Session-ID", "") or "default"
 
         # ── Sliding window check ──
         now = time.time()
@@ -112,7 +125,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
         # ── Similar query dedup ──
         if settings.SIMILAR_QUERY_DEDUP:
-            body = await request.body()
             query_hash = hashlib.md5(body).hexdigest() if body else ""
 
             if query_hash:
@@ -136,9 +148,6 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                         },
                     )
                 hashes.append((now, query_hash))
-
-            # Reconstruct request body for downstream
-            request._body = body
 
         return await call_next(request)
 
@@ -240,3 +249,30 @@ class ExceptionHandlerMiddleware(BaseHTTPMiddleware):
                     }
                 },
             )
+
+
+# ── Api-Key Auth (Phase: demo-grade, /debug + /tasks only) ────
+
+
+class ApiKeyMiddleware(BaseHTTPMiddleware):
+    """演示级鉴权:/debug/* 与 /tasks/* 要求 X-API-Key 头。
+
+    DEBUG_API_KEY 为空 = 关闭(本地免鉴权)。仅覆盖调试台与任务管理端点,
+    商城/AI 对话/健康检查不受影响。
+    """
+
+    async def dispatch(self, request: Request, call_next) -> Response:
+        # 按请求读配置(而非启动时固化),便于运行时切换与测试注入
+        key = get_settings().DEBUG_API_KEY
+        if key and request.url.path.startswith(("/debug/", "/tasks")):
+            if request.headers.get("X-API-Key", "") != key:
+                return JSONResponse(
+                    status_code=401,
+                    content={
+                        "error": {
+                            "code": "UNAUTHORIZED",
+                            "message": "缺少或错误的 X-API-Key",
+                        }
+                    },
+                )
+        return await call_next(request)

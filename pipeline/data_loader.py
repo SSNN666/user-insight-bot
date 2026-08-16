@@ -7,6 +7,9 @@ Tier 3: Built-in mock dataset
 Phase 3: incremental loading + expanded mock data with product/category.
 """
 
+import hashlib
+import os
+
 import pandas as pd
 import numpy as np
 from sqlalchemy import create_engine, text
@@ -109,6 +112,173 @@ def _try_cache_joined() -> pd.DataFrame | None:
     return data
 
 
+# ── Tier 2.5: 京东 JData 公开脱敏数据集(可选) ──────────────────
+#
+# 「京东 JData 算法大赛——高潜用户购买意向预测」数据集(官方发布在 DataFountain
+# 竞赛平台,学术研究许可、已脱敏;下载渠道见 docs/DATA_COMPLIANCE.md):
+#   JData_User.csv    user_id(脱敏), age, sex, user_lv_cd, user_reg_tm
+#   JData_Product.csv sku_id, a1, a2, a3, cate, brand
+#   JData_Action.csv  user_id, sku_id, time, model_id, type, cate, brand(2016-02~04 分月)
+#   JData_Comment.csv dt, sku_id, comment_num, has_bad_comment, bad_comment_rate
+#
+# 映射口径(如实记录,面试可讲):
+#   - type=4(下单)行为行 → 一条订单明细(quantity=1);F=下单次数,M=Σ价格
+#   - JData 不含价格字段 → 按 (cate, brand) 做 md5 确定性合成价格(50-5000 元,
+#     同一商品跨运行稳定,快照对比不受影响)
+#   - 分类/品牌为数字编码,不做中文映射(推荐 Skill 品类不匹配时自动回退热门商品)
+#   - Action 表的 user_id/sku_id 是浮点("1.0"),加载时归一化为 int 才能与 User 表 join
+
+JDATA_ACTION_TYPE_ORDER = 4      # 官方行为编码:1=浏览 2=加购 3=删除 4=下单 5=关注 6=点击
+JDATA_SEX_MAP = {0: "男", 1: "女", 2: "保密"}
+
+
+def _synth_price(cate, brand) -> float:
+    """JData 无价格字段:(品类,品牌) → md5 → 50-5000 元确定性合成。"""
+    h = int(hashlib.md5(f"{cate}|{brand}".encode("utf-8")).hexdigest()[:8], 16)
+    return round(50 + (h % 4950), 2)
+
+
+def _find_jdata_files(data_dir: str) -> dict[str, list[str]]:
+    """按文件名关键字匹配 JData 四个表(支持 JData_Action_201602.csv 分月格式)。"""
+    found: dict[str, list[str]] = {"user": [], "product": [], "action": [], "comment": []}
+    if not os.path.isdir(data_dir):
+        return found
+    for fn in sorted(os.listdir(data_dir)):
+        if not fn.lower().endswith(".csv"):
+            continue
+        low = fn.lower()
+        if "user" in low:
+            found["user"].append(fn)
+        elif "product" in low or "sku" in low:
+            found["product"].append(fn)
+        elif "action" in low:
+            found["action"].append(fn)
+        elif "comment" in low:
+            found["comment"].append(fn)
+    return found
+
+
+def _read_jdata_csvs(data_dir: str, names: list[str], nrows: int | None = None) -> pd.DataFrame:
+    """拼接同一表的分月 CSV;任一文件读取失败抛 ComputationError(整档跳过)。"""
+    frames = []
+    for fn in names:
+        # on_bad_lines="skip":官方数据存在个别字段数不一致的行(6 列 vs 7 列)
+        # 编码:官方文件混用 utf-8 与 GBK(实测 JData_User.csv 为 GBK)→ 依次尝试
+        path = os.path.join(data_dir, fn)
+        try:
+            df = pd.read_csv(path, nrows=nrows, encoding="utf-8-sig",
+                             low_memory=False, on_bad_lines="skip")
+        except UnicodeDecodeError:
+            df = pd.read_csv(path, nrows=nrows, encoding="gbk",
+                             low_memory=False, on_bad_lines="skip")
+        frames.append(df)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def _build_orders_from_jdata(
+    users: pd.DataFrame,
+    actions: pd.DataFrame,
+    max_users: int | None = None,
+    action_type_order: int = JDATA_ACTION_TYPE_ORDER,
+) -> pd.DataFrame | None:
+    """JData 原始表 → canonical orders DataFrame(纯函数,便于单测)。
+
+    Returns None when no order actions exist.
+    """
+    if users.empty or actions.empty or "type" not in actions.columns:
+        return None
+
+    orders = actions[actions["type"] == action_type_order].copy()
+    if orders.empty:
+        return None
+
+    # 官方 Action 表 user_id/sku_id 为浮点("1.0"),归一化为 int 才能与 User 表 join
+    for col in ("user_id", "sku_id"):
+        orders[col] = pd.to_numeric(orders[col], errors="coerce")
+        orders = orders[orders[col].notna()].copy()
+        orders[col] = orders[col].astype(int)
+
+    # 按时间排序后分配自增 order_id(同一用户的时间顺序即订单顺序)
+    orders = orders.sort_values("time").reset_index(drop=True)
+    orders["order_id"] = orders.index + 1
+
+    # 用户采样:按出现顺序取前 N 个去重用户(确定性)
+    if max_users and orders["user_id"].nunique() > max_users:
+        keep = orders["user_id"].drop_duplicates().head(max_users)
+        orders = orders[orders["user_id"].isin(keep)]
+
+    # 价格:JData 无价格字段 → 确定性合成;一行下单行为 = 一条订单明细
+    price_col = orders.apply(lambda r: _synth_price(r.get("cate"), r.get("brand")), axis=1)
+    orders["unit_price"] = price_col
+    orders["price"] = price_col
+    orders["quantity"] = 1
+    orders["total_amount"] = price_col
+    orders["order_date"] = pd.to_datetime(orders["time"], errors="coerce")
+    orders["product_id"] = orders["sku_id"]
+    orders["product_name"] = "SKU-" + orders["sku_id"].astype(str)
+    orders["category"] = orders["cate"].astype(str) if "cate" in orders.columns else "未知"
+
+    # 用户维:age / 性别(sex 0/1/2)/ 注册时间(user_reg_tm,空值保留 NaT)
+    u = users[["user_id", "age"]].copy()
+    u["user_id"] = pd.to_numeric(u["user_id"], errors="coerce")
+    u = u[u["user_id"].notna()]
+    u["user_id"] = u["user_id"].astype(int)
+    if "sex" in users.columns:
+        # 官方数据 sex 读入为 float(2.0/0.0/1.0),显式归一化为 int 再查字典
+        sex = pd.to_numeric(users["sex"], errors="coerce").astype("Int64")
+        u["gender"] = sex.map(JDATA_SEX_MAP).fillna("保密")
+    else:
+        u["gender"] = "保密"
+    u["reg_date"] = pd.to_datetime(
+        users["user_reg_tm"] if "user_reg_tm" in users.columns else pd.NaT,
+        errors="coerce",
+    )
+    orders = orders.merge(u, on="user_id", how="left")
+    # 官方口径:age 是分桶字符串("26-35岁"/"56岁以上"),-1 = 未知(不是数值!)
+    orders["age"] = orders["age"].fillna("未知").astype(str).replace("-1", "未知")
+    orders["city"] = "未知"
+
+    keep_cols = ["order_id", "user_id", "product_id", "product_name", "category",
+                 "price", "unit_price", "quantity", "total_amount", "order_date",
+                 "reg_date", "age", "gender", "city"]
+    return orders[[c for c in keep_cols if c in orders.columns]]
+
+
+def load_tianchi_orders(data_dir: str | None = None, since_date: str | None = None) -> pd.DataFrame | None:
+    """加载京东 JData CSV 并映射为 canonical orders。
+
+    Returns None when files missing (caller falls through to mock tier).
+    """
+    settings = get_settings()
+    data_dir = data_dir or settings.TIANCHI_DATA_DIR
+    found = _find_jdata_files(data_dir)
+    if not (found["user"] and found["action"]):
+        logger.debug("tianchi_files_missing", extra={"dir": data_dir})
+        return None
+
+    try:
+        max_actions = settings.TIANCHI_MAX_ACTIONS
+        users = _read_jdata_csvs(data_dir, found["user"])
+        actions = _read_jdata_csvs(data_dir, found["action"], nrows=max_actions)
+        df = _build_orders_from_jdata(users, actions, max_users=settings.TIANCHI_MAX_USERS)
+        if df is None:
+            return None
+        if since_date:
+            df = df[pd.to_datetime(df["order_date"], errors="coerce") > pd.Timestamp(since_date)]
+        logger.info("tier_tianchi_success", extra={
+            "dir": data_dir, "rows": len(df), "users": df["user_id"].nunique(),
+        })
+        return df
+    except (OSError, ValueError, pd.errors.ParserError) as e:
+        logger.warning("tianchi_load_failed", extra={"dir": data_dir, "error": str(e)})
+        return None
+
+
+def _try_tianchi(since_date: str | None = None) -> pd.DataFrame | None:
+    """Tier 2.5: 京东 JData 数据源(仅 DATA_SOURCE=tianchi 时进降级链)。"""
+    return load_tianchi_orders(since_date=since_date)
+
+
 # ── Tier 3: mock data ───────────────────────────────────────────
 
 
@@ -118,8 +288,11 @@ def generate_mock_orders() -> pd.DataFrame:
     Phase 3: includes product_id, category, and unit_price for
     extended profile computation.
     """
-    # ── Random seed: different data every time ──
-    np.random.seed(None)  # OS entropy — truly random each call
+    # ── Random seed ──
+    # MOCK_SEED 固定时数据可复现(默认 42):Watcher 事件反映真实业务变化而非随机噪声;
+    # 设为 None 时每次生成不同数据(演示随机性用)。
+    settings = get_settings()
+    np.random.seed(settings.MOCK_SEED if settings.MOCK_SEED is not None else None)
 
     n_users = np.random.randint(120, 350)
     n_orders = np.random.randint(600, 2000)
@@ -221,12 +394,15 @@ def _try_mock_data() -> pd.DataFrame:
 
 
 def load_orders_with_join() -> pd.DataFrame:
-    """Three-tier fallback: MySQL → TTL cache → mock data."""
+    """降级链:MySQL → TTL 缓存 → (京东 JData,可选) → mock。"""
+    settings = get_settings()
     tiers = [
         ("MySQL", _try_mysql_joined),
         ("cache", _try_cache_joined),
-        ("mock", _try_mock_data),
     ]
+    if settings.DATA_SOURCE == "tianchi":
+        tiers.append(("tianchi", _try_tianchi))
+    tiers.append(("mock", _try_mock_data))
     for name, loader in tiers:
         try:
             result = loader()
@@ -247,10 +423,13 @@ def load_new_orders_since(since_date: str) -> pd.DataFrame:
 
     Three-tier fallback; Tier 2 cache is bypassed for delta loads.
     """
+    settings = get_settings()
     tiers = [
         ("MySQL", lambda: _try_mysql_joined(since_date=since_date)),
-        ("mock", _try_mock_data),
     ]
+    if settings.DATA_SOURCE == "tianchi":
+        tiers.append(("tianchi", lambda: _try_tianchi(since_date=since_date)))
+    tiers.append(("mock", _try_mock_data))
     for name, loader in tiers:
         try:
             df = loader()

@@ -135,31 +135,34 @@ class MultiAgentOrchestrator:
         ctx = context or {}
         start = time.monotonic()
 
-        # Phase 1: Monitor
+        # Phase 1: Monitor(角色提示词经 system_override 注入 decide 节点)
         monitor_input = self._build_monitor_query(trigger_event, ctx)
-        monitor_reply, _ = _ask_agent_internal(
+        monitor_reply, _, _, _ = _ask_agent_internal(
             monitor_input,
             session_id=f"{self.trace_id}-monitor",
             check_mode="strict",
             max_tool_rounds=3,
+            system_override=MONITOR_PROMPT,
         )
 
         # Phase 2: Analysis
         analysis_input = self._build_analysis_query(trigger_event, monitor_reply, ctx)
-        analysis_reply, _ = _ask_agent_internal(
+        analysis_reply, _, _, _ = _ask_agent_internal(
             analysis_input,
             session_id=f"{self.trace_id}-analysis",
             check_mode="strict",
             max_tool_rounds=5,
+            system_override=ANALYSIS_PROMPT,
         )
 
         # Phase 3: Strategy
         strategy_input = self._build_strategy_query(trigger_event, monitor_reply, analysis_reply, ctx)
-        strategy_reply, _ = _ask_agent_internal(
+        strategy_reply, _, _, _ = _ask_agent_internal(
             strategy_input,
             session_id=f"{self.trace_id}-strategy",
             check_mode="strict",
             max_tool_rounds=5,
+            system_override=STRATEGY_PROMPT,
         )
 
         elapsed = round(time.monotonic() - start, 1)
@@ -178,13 +181,11 @@ class MultiAgentOrchestrator:
         return result
 
     def _build_monitor_query(self, event: str, ctx: dict) -> str:
-        monitor_role = "你是监测Agent。仅做监测告警，不做分析和建议。"
-        return f"{monitor_role}\n\n触发事件: {event}\n上下文: {ctx}\n\n请监测并输出告警。"
+        # 角色定义由 system_override=MONITOR_PROMPT 注入,此处只给数据上下文
+        return f"触发事件: {event}\n上下文: {ctx}\n\n请监测并输出告警。"
 
     def _build_analysis_query(self, event: str, monitor_output: str, ctx: dict) -> str:
-        analysis_role = "你是分析Agent。基于监测结果做根因分析，不做策略建议。"
         return (
-            f"{analysis_role}\n\n"
             f"触发事件: {event}\n"
             f"监测报告: {monitor_output[:2000]}\n"
             f"上下文: {ctx}\n\n"
@@ -192,9 +193,7 @@ class MultiAgentOrchestrator:
         )
 
     def _build_strategy_query(self, event: str, monitor_output: str, analysis_output: str, ctx: dict) -> str:
-        strategy_role = "你是策略Agent。基于监测和分析结果给出运营策略。"
         return (
-            f"{strategy_role}\n\n"
             f"触发事件: {event}\n"
             f"监测报告: {monitor_output[:1500]}\n"
             f"分析报告: {analysis_output[:2000]}\n"

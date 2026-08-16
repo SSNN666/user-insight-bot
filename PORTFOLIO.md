@@ -134,15 +134,19 @@ fact_check  → 三层规则核查，strict 模式不通过就回到 llm_decide 
   回答质量更高 → 用户更愿意点赞 → 更多高质量样本
 ```
 
-### 6. 三级数据降级
+### 6. 数据源降级 + 天池公开数据集接入
 
 ```
 MySQL :3306 → 连不上？
   Pickle TTL 缓存 → 过期了？
-    np.random 生成 Mock 数据（150用户 × 50商品 × 随机订单）
+    (可选) 京东 JData 公开脱敏数据集 CSV → 文件缺失？
+      np.random 生成 Mock 数据（150用户 × 50商品 × 随机订单）
 ```
 
-保证任何人 clone 后不配置数据库也能跑全功能。
+保证任何人 clone 后不配置数据库也能跑全功能。`DATA_SOURCE=tianchi` 时接入
+京东 JData 算法大赛数据集(已脱敏、学术许可):下单行为→订单明细、人口属性进画像、
+无价格字段按 (品类,品牌) 确定性合成——RFM/聚类/Agent 全链路零改动,
+简化的口径如实记录在 [DATA_COMPLIANCE.md](docs/DATA_COMPLIANCE.md)。
 
 ---
 
@@ -153,7 +157,7 @@ MySQL :3306 → 连不上？
 | 0 | 8 包分层 + 配置中心 + 日志 + 异常体系 + LLM 封装 | 硬编码、无日志、裸 except |
 | 1 | LangGraph StateGraph + Skill 框架 + Preprocess + Reflect | ReAct 自由循环不可控 |
 | 2 | 三层纯规则 FactCheck | LLM 编造数据 |
-| 3 | 自动选 K + 增量 RFM + 决策树剪枝 + 快照 | 固定 K=4 不科学 |
+| 3 | Gap statistic 自动选 K + 增量 RFM + 决策树剪枝 + 快照 | 固定 K=4 不科学 |
 | 4 | Watcher 引擎 + 6 条检测规则 + 事件降噪/冷却 | 只能被动触发 |
 | 5 | 滑动窗口限流 + 异常标准化 + 线程池隔离 | 无保护措施 |
 | 6 | Gradio 解耦 → 全部通过 httpx 调 API | Gradio 直连业务代码 |
@@ -199,10 +203,16 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 ### Q: 怎么防止 LLM 幻觉？
 > "做了好几轮迭代。一开始 Self-Reflection 让 LLM 自己检查，发现它会骗自己。改成了三层纯规则核查——数值层正则对比数据库、规则层校验决策树阈值、逻辑层检查聚类一致性。零 LLM 调用，毫秒级完成。relaxed 模式追加警告，strict 模式拦截
 ### Q: 怎么保证生产稳定？
-> "滑动窗口限流 60s/20次 + 相似问句 MD5 去重。LLM 全局并发 Semaphore(3)。异常统一转 JSON 返回。SQLite 全部 WAL 模式。独立线程池处理后台任务不抢占用户请求。API 请求全量 JSON 结构化日志。"
+> "分层做:① 统一 LLM 适配器——超时/429/额度不足/上下文超长错误分类驱动重试退避,额度不足和鉴权不盲目重试,直接降级到下一家供应商(阿里百炼 → DeepSeek → 千帆 → 本地 Ollama);② 请求层——按 session 分桶的滑动窗口限流 + 相似问句 MD5 去重,调试端点演示级 Api-Key;③ 安全——规则式 Prompt 注入检测(加权拦截)+ 百度内容审核输入输出双向校验(fail-open 不阻断主链路);④ 工程——Agent 跑线程池不阻塞事件循环、SQLite 全 WAL、JSON 结构化日志、快照保留策略防无限累积。"
+
+### Q: 两个项目怎么复用同一套 LLM 代码？
+> "抽了一个统一大模型适配器,一份源码复制进两个仓库(各自自包含、可独立跑)。适配器对上层只暴露 invoke/stream/stream_events 和错误分类:超时重试、429 按 Retry-After 退避、额度不足/鉴权直接降级、上下文超长截断重试一次。电商项目再包一层 LangChain Bridge(自定义 chat model 实现 bind_tools),让 LangGraph 的工具绑定语义和适配器的降级链同时生效——康养项目直接消费适配器原语,两个项目的差异只在最后一层。"
+
+### Q: 流式 SSE 怎么做到"实时展示每一步工具调用"？
+> "不用 astream_events——因为 tools 节点是直接执行 Skill 而不是走 ToolNode,不会产生 on_tool_start 事件。用 graph.astream 的三种 stream mode 组合:custom 模式由节点内 get_stream_writer 发 node_start/tool_call/tool_result 事件,updates 模式取节点结果和事实核查结论,messages 模式拿 decide 节点的 token 级 delta。前端用原生 fetch 手写 SSE 帧解析、渲染步骤条,token 打完再用 answer 事件做权威全文覆盖——因为 respond 节点可能修正 Markdown、fact_check 会追加警告。"
 
 ### Q: 测试怎么设计的？
-> "挑了三个最核心的纯函数模块——fact_checker（24用例）测正则匹配和边界、data_store（25用例）测 CRUD 和 10 线程并发安全、events（17用例）测快照对比和事件检测。纯逻辑不需要启动 LLM，秒级跑完。CI 在每次 push 自动触发。"
+> "分层设计,111 个用例全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
 
 ### Q: 怎么部署？
 > "docker compose up -d 一键启动全部 4 个服务。Ollama 拆了独立的 GPU profile——纯 CPU 环境用 OpenAI 兼容 API 也能跑。前端用 Nginx 做反向代理，/api/* 自动转发。GitHub Actions 在每次 push 自动跑测试和导入校验。"
@@ -211,7 +221,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 > "LLM 幻觉问题经过了好几轮迭代——Self-Reflection → 发现不靠谱 → 纯规则核查 → strict 模式死循环 → 加最大重试次数。还有 Ollama 模型不支持 function calling 的问题，切到 qwen2.5:7b 又加了 text→tool_call 桥接。Milvus-lite 在 Windows 上有文件锁问题，从 upsert 改成 delete+insert，flush 改成批量。这些都是在真实环境中踩出来的。"
 
 ### Q: 有什么不足？
-> "当前测试覆盖了最核心的 3 个模块，但 agent 图、检索管线、Skill 执行等模块还没有单元测试——这些依赖 LLM，需要 mock。API 没有认证中间件，本地项目不需要但生产环境必须加。前端 AI 对话还没做成流式——流式端点 `/ask/stream` 后端已经写好了，前端还没接。"
+> "诚实的短板:① 事实核查是正则规则引擎,只覆盖特定句式(表格行、'分群X有N人'),LLM 换一种说法会漏检——所以云端内容审核作为第二道防线,但覆盖仍是规则边界;② 会话持久化是 JSON 文件版 checkpointer,演示级够用,生产要换 Postgres checkpoint + 分布式锁;③ 飞轮评分器阈值是经验值,需要线上数据迭代校准;④ 百度内容审核免费档 QPS=1,输出审核偶有误伤(演示时可临时关闭)。这些我都知道边界在哪,不是不知道才不做。"
 
 ---
 
@@ -225,9 +235,10 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 1. 用 LangGraph 搭了六节点 Agent 图——意图识别 → LLM 决策 → 工具执行 → 数据自检 → 回答生成 → 事实核查，三条条件边两条回环
 2. 做了三层纯规则 FactCheck 解决幻觉——数值层正则对比数据库、规则层校验决策树、逻辑层检查一致性。零 LLM 调用毫秒级完成
 3. 混合检索双路召回——BM25 + jieba 关键词 + Milvus 768 维语义向量，RRF 融合，LLM 精排。评测 Hit@1=70%、MRR=0.75
-4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → 自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析
+4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → HIGH 事件自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析,三段结果落库可查;分群历史快照画成时间趋势图
 5. 数据飞轮——用户反馈 + 自动评分 → 高质量样本入库 → 向量索引 → 反哺 Agent 系统提示
-6. Docker Compose 一键部署 + GitHub Actions CI 自动跑 66 个测试
+6. 会话记忆持久化(JSON checkpointer,重启不丢)+ 长对话自动摘要;个性化推荐闭环(图像标签→画像→打分推荐→一键加购)
+7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 122 个测试
 
 **Result**：
 - 三层核查下事实准确率接近 100%
@@ -247,6 +258,21 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 - [ ] Agent 工具物理隔离的做法
 - [ ] 数据源三级降级策略
 - [ ] 7 个 Skill 分别是什么、分属哪个场景
-- [ ] 66 测试覆盖了哪 3 个模块
+- [ ] 自动选 K:Gap statistic + 1-SE 简约规则 + 最小簇约束(为什么不用肘部+轮廓的组合分)
+- [ ] 分群业务命名:LLM 生成 + 启发式兜底 + 缓存,全链路(对话/图表/建议/环比)说人话
+- [ ] 对话内出图:Skill 数据 → chart 协议 → 前端零依赖 SVG 渲染
+- [ ] 环比 Skill:月份参数 + 诚实降级(无快照时报可用月份)
+- [ ] 数据新鲜度标注:数据时间/数据源/采样口径
+- [ ] 快照保留策略:20 个只够 100 分钟 → 2016 个(一周),趋势/环比才有历史可看
+- [ ] 统一适配器:错误分类表 + 降级链 + 与康养项目的复用方式
+- [ ] SSE 三 stream mode 组合 + 事件 schema(meta/node_start/tool_call/delta/answer/done)
+- [ ] 注入检测 + 内容审核 fail-open 的取舍
+- [ ] Trace 节点耗时是实测的(不是估算)
+- [ ] 122 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成)能讲
+- [ ] HIGH 事件三阶段流水线的触发与结果落库
+- [ ] 分群时间趋势图的数据来源(快照历史)
+- [ ] 会话持久化的实现(JSON checkpointer 的 serde 桥接)与重启恢复演示
+- [ ] 长对话摘要的触发条件与上下文有界性
+- [ ] 个性化推荐的打分因子(品类/标签/价格适配)
 - [ ] Docker Compose 的 4 个服务
 - [ ] 项目从 7 文件到 65 文件的演进故事

@@ -47,4 +47,47 @@ export const getUserProfile = (userId = 1) =>
 export const askAgent = (question: string, sessionId = 'vue-chat') =>
   api.post('/ask', { question, session_id: sessionId }).then(r => r.data)
 
+/**
+ * SSE 流式问答:逐步展示 Agent 执行过程。
+ * 事件:meta / node_start / node_end_detail / tool_call / tool_result /
+ *       delta / fact_check / answer / done / error
+ * axios 不支持 SSE 帧解析 → 原生 fetch + 手写帧拆分(零新依赖)。
+ */
+export function askAgentStream(
+  question: string,
+  sessionId: string,
+  onEvent: (ev: any) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  return fetch('/ask/stream', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, session_id: sessionId }),
+    signal,
+  }).then(async res => {
+    if (!res.ok || !res.body) {
+      onEvent({ event: 'error', message: `HTTP ${res.status}` })
+      return
+    }
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder()
+    let buf = ''
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      buf += decoder.decode(value, { stream: true })
+      let idx: number
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx)
+        buf = buf.slice(idx + 2)
+        for (const line of frame.split('\n')) {
+          if (line.startsWith('data: ')) {
+            try { onEvent(JSON.parse(line.slice(6))) } catch { /* 忽略坏帧 */ }
+          }
+        }
+      }
+    }
+  })
+}
+
 export default api
