@@ -24,7 +24,16 @@ jobs:
         run: uv sync --frozen
 
       - name: Run tests
-        run: uv run pytest -v --tb=short
+        run: uv run pytest -v --tb=short 2>&1 | tee /tmp/pytest_out.txt
+      - name: Upload failure details (debug)
+        if: failure()
+        run: |
+          {
+            echo '### pytest 失败详情'
+            echo '```'
+            tail -120 /tmp/pytest_out.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Verify imports
         run: |
