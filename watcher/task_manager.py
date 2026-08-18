@@ -159,6 +159,26 @@ class TaskManager:
                 ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
+    def list_tasks_by_time(
+        self, since: str, until: str,
+        event_type: str | None = None, limit: int = 200,
+    ) -> list[TaskRecord]:
+        """按 created_at 时间窗口查询任务(自动周报数据源)。
+
+        created_at 均为 ``_now()`` 产出的 UTC ISO 字符串,格式一致可直接比较;
+        走既有 idx_tasks_type_ts(event_type, created_at) 索引。
+        """
+        sql = "SELECT * FROM watcher_tasks WHERE created_at >= ? AND created_at <= ?"
+        params: list = [since, until]
+        if event_type:
+            sql += " AND event_type = ?"
+            params.append(event_type)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(limit)
+        with self._get_conn() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [self._row_to_record(r) for r in rows]
+
     # ── Status transitions ──────────────────────────────────
 
     def set_running(self, task_id: int) -> None:

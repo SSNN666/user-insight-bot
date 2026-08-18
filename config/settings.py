@@ -190,6 +190,10 @@ class Settings(BaseSettings):
     HIGH_VALUE_DORMANT_DAYS: int = 30
     HIGH_VALUE_DORMANT_MIN_USERS: int = 5
     HIGH_VALUE_DORMANT_COOLDOWN_SECONDS: int = 86400   # 事件级节流(用户集去重之外的次闸)
+    # 自动周报(每周一生成 Markdown,纯规则拼接;错过触发时刻自动补做,幂等)
+    WEEKLY_REPORT_ENABLED: bool = True
+    WEEKLY_REPORT_HOUR: int = 9
+    WEEKLY_REPORT_TIMEZONE: str = "Asia/Shanghai"
     # Dedup
     EVENT_COOLDOWN_SECONDS: int = 3600
     EVENT_MERGE_WINDOW: int = 600

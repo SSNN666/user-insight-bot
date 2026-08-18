@@ -136,3 +136,44 @@ class TestAskStream:
         kinds = [e["event"] for e in events]
         assert "error" in kinds
         assert "done" not in kinds
+
+
+class TestWeeklyReportApi:
+    """周报调试端点(纯规则生成,不依赖 agent stub)。"""
+
+    def test_trigger_and_get(self, client, tmp_path, monkeypatch):
+        import watcher.task_manager as tm_mod
+        # 重置单例(conftest 已重定向 WATCHER_DB_PATH)
+        tm_mod._task_manager = None
+        # 阻止 get_segment_names 触发真实流水线(读 JData + 污染快照目录)
+        import pandas as pd
+        seg_df = pd.DataFrame({
+            "user_id": [1, 2, 3], "recency": [3, 10, 20],
+            "frequency": [5.0, 3.0, 2.0], "monetary": [800.0, 500.0, 300.0],
+            "segment": [2, 1, 0], "flow_tag": ["active", "potential", "churned"],
+        })
+        monkeypatch.setattr(
+            "skills.user_segment._load_and_process",
+            lambda force_refresh=False: (None, seg_df, None))
+        # 快照×2(conftest 已重定向 SNAPSHOT_DIR)
+        from pipeline.user_segmentation import save_snapshot
+        rfm = pd.DataFrame({
+            "user_id": [1, 2, 3], "recency": [3, 10, 20],
+            "frequency": [5.0, 3.0, 2.0], "monetary": [800.0, 500.0, 300.0],
+            "segment": [2, 1, 0], "flow_tag": ["active", "potential", "churned"],
+        })
+        save_snapshot(rfm, k_value=3, silhouette=0.6)
+        save_snapshot(rfm, k_value=3, silhouette=0.6)
+
+        r = client.post("/debug/trigger-weekly-report", json={})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["generated"] is True
+        assert "content" in body and "# 📊 运营周报" in body["content"]
+
+        r2 = client.get("/debug/weekly-report")
+        assert r2.status_code == 200
+        reports = r2.json()["reports"]
+        assert len(reports) == 1
+        assert reports[0]["content"] == body["content"]

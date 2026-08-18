@@ -880,7 +880,46 @@ def create_ui():
             ignore_btn.click(monitor_ignore_task, retry_id, task_action_msg)
 
         # ════════════════════════════════════════════════════════
-        # Tab 4: LLM Observability
+        # Tab 4: 自动周报(每周一生成,可手动触发)
+        # ════════════════════════════════════════════════════════
+        with gr.Tab("📅 周报"):
+            gr.Markdown("每周一 09:00 自动生成(错过自动补做):本周事件 + 分群趋势 + 运营建议,可直接复制分享。")
+
+            with gr.Row():
+                report_refresh_btn = gr.Button("🔄 刷新/生成周报", variant="primary")
+                report_force_btn = gr.Button("♻️ 强制重新生成")
+            report_display = gr.Markdown(
+                "_点击按钮生成周报(幂等:同周已生成则直接显示)。_"
+            )
+
+            def show_weekly_report(force: bool = False):
+                try:
+                    if force:
+                        data = _post("/debug/trigger-weekly-report", {"force": True})
+                    else:
+                        data = _get("/debug/weekly-report")
+                    if isinstance(data, dict) and "detail" in data:
+                        return f"_生成失败: {data['detail']}_"
+                    reports = data.get("reports") or []
+                    if reports:
+                        content = reports[0].get("content", "")
+                        if content:
+                            return content
+                    # 无周报 → 立即触发生成
+                    gen = _post("/debug/trigger-weekly-report", {})
+                    if isinstance(gen, dict) and "detail" in gen:
+                        return f"_生成失败: {gen['detail']}_"
+                    return gen.get("content") or "_(生成失败: 无内容)_"
+                except Exception as e:
+                    return f"_生成失败: {e}_"
+
+            report_refresh_btn.click(
+                lambda: show_weekly_report(force=False), outputs=report_display)
+            report_force_btn.click(
+                lambda: show_weekly_report(force=True), outputs=report_display)
+
+        # ════════════════════════════════════════════════════════
+        # Tab 5: LLM Observability
         # ════════════════════════════════════════════════════════
         with gr.Tab("📈 可观测性"):
             gr.Markdown("实时监控 LLM 调用统计、延迟分布和工具调用成功率。")

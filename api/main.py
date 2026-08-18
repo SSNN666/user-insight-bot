@@ -40,6 +40,15 @@ async def lifespan(app: FastAPI):
             "interval": settings.FLYWHEEL_UPDATE_INTERVAL,
         })
 
+    # 自动周报调度器(每周一生成,错过自动补做)
+    weekly_task: asyncio.Task | None = None
+    if settings.WEEKLY_REPORT_ENABLED:
+        from watcher.weekly_report import get_weekly_report_scheduler
+        weekly_task = asyncio.create_task(get_weekly_report_scheduler().start())
+        get_logger("api.lifespan").info("weekly_report_started", extra={
+            "hour": settings.WEEKLY_REPORT_HOUR,
+        })
+
     yield
 
     if watcher_task is not None:
@@ -61,6 +70,16 @@ async def lifespan(app: FastAPI):
         except asyncio.CancelledError:
             pass
         get_logger("api.lifespan").info("flywheel_stopped")
+
+    if weekly_task is not None:
+        from watcher.weekly_report import get_weekly_report_scheduler
+        try:
+            get_weekly_report_scheduler().stop()
+            weekly_task.cancel()
+            await weekly_task
+        except asyncio.CancelledError:
+            pass
+        get_logger("api.lifespan").info("weekly_report_stopped")
 
     # Clean up vector store (Milvus close)
     from flywheel.vector_store import reset_vector_store

@@ -423,6 +423,23 @@ async def debug_trigger_event():
     }
 
 
+@router.post("/debug/trigger-weekly-report")
+async def debug_trigger_weekly_report(payload: dict | None = None):
+    """手动触发周报生成(幂等:同周已存在且非 force → 返回现有内容)。"""
+    from watcher.weekly_report import generate_weekly_report
+    force = bool((payload or {}).get("force", False))
+    result = generate_weekly_report(force=force)
+    return {"status": "ok", **result}
+
+
+@router.get("/debug/weekly-report")
+async def debug_get_weekly_report():
+    """返回最近一份周报内容(无则空列表)。"""
+    from watcher.weekly_report import list_recent_reports
+    reports = list_recent_reports(limit=1)
+    return {"status": "ok", "reports": reports}
+
+
 # ── 商品图像解析 (VL 扩展, Phase: 加分项) ──────────────────
 
 
