@@ -6,6 +6,7 @@ Tab 2: Debug Console (CRUD + mock reset + event trigger)
 Tab 3: Task Monitor + charts
 """
 
+import os
 import warnings
 
 import gradio as gr
@@ -378,6 +379,30 @@ def monitor_list_tasks():
         return pd.DataFrame({"info": ["无任务"]})
     except Exception as e:
         return pd.DataFrame({"error": [str(e)]})
+
+
+def export_excel_file(dataset: str, days: int | None = None) -> str | None:
+    """导出数据集为 xlsx:经 API 下载到本地 → 返回文件路径(gr.File 展示)。
+
+    失败返回以 _ 开头的错误文案(供 gr.Markdown 展示)。
+    """
+    try:
+        params = {"dataset": dataset}
+        if days is not None:
+            params["days"] = days
+        resp = _client.get(f"{API}/api/export/excel", params=params, timeout=60)
+        if resp.status_code != 200:
+            return f"_导出失败(HTTP {resp.status_code}): {resp.text[:150]}_"
+        out_dir = os.path.join(_gs().CACHE_DIR, "exports")
+        os.makedirs(out_dir, exist_ok=True)
+        cd = resp.headers.get("content-disposition", "")
+        filename = cd.split("filename=")[-1].strip('"') or f"{dataset}.xlsx"
+        path = os.path.join(out_dir, filename)
+        with open(path, "wb") as f:
+            f.write(resp.content)
+        return path
+    except Exception as e:
+        return f"_导出失败: {e}_"
 
 def monitor_retry_task(task_id):
     try:
@@ -879,6 +904,31 @@ def create_ui():
             retry_btn.click(monitor_retry_task, retry_id, task_action_msg)
             ignore_btn.click(monitor_ignore_task, retry_id, task_action_msg)
 
+            # ── 导出 Excel(运营一键拉数)──
+            gr.Markdown("### 📤 导出 Excel")
+            with gr.Row():
+                export_stats_btn = gr.Button("导出分群统计")
+                export_funnel_btn = gr.Button("导出转化漏斗(7天)")
+                export_trend_btn = gr.Button("导出分群趋势")
+                export_tasks_btn = gr.Button("导出任务列表")
+            export_file = gr.File(label="下载", interactive=False)
+            export_msg = gr.Markdown("")
+
+            def do_export(dataset, days=None):
+                path = export_excel_file(dataset, days)
+                if path and not path.startswith("_"):
+                    return path, f"✅ 已生成: `{os.path.basename(path)}`"
+                return None, path or "_导出失败_"
+
+            export_stats_btn.click(
+                lambda: do_export("segment_stats"), outputs=[export_file, export_msg])
+            export_funnel_btn.click(
+                lambda: do_export("funnel", days=7), outputs=[export_file, export_msg])
+            export_trend_btn.click(
+                lambda: do_export("segment_trend"), outputs=[export_file, export_msg])
+            export_tasks_btn.click(
+                lambda: do_export("tasks"), outputs=[export_file, export_msg])
+
         # ════════════════════════════════════════════════════════
         # Tab 4: 自动周报(每周一生成,可手动触发)
         # ════════════════════════════════════════════════════════
@@ -917,6 +967,21 @@ def create_ui():
                 lambda: show_weekly_report(force=False), outputs=report_display)
             report_force_btn.click(
                 lambda: show_weekly_report(force=True), outputs=report_display)
+
+            # ── 周报导出 Excel(多 sheet:事件/分群/高价值/建议)──
+            with gr.Row():
+                report_excel_btn = gr.Button("📥 导出周报 Excel")
+            report_excel_file = gr.File(label="周报下载", interactive=False)
+            report_excel_msg = gr.Markdown("")
+
+            def do_export_report():
+                path = export_excel_file("weekly_report")
+                if path and not path.startswith("_"):
+                    return path, f"✅ 已生成: `{os.path.basename(path)}`"
+                return None, path or "_导出失败_"
+
+            report_excel_btn.click(
+                do_export_report, outputs=[report_excel_file, report_excel_msg])
 
         # ════════════════════════════════════════════════════════
         # Tab 5: LLM Observability

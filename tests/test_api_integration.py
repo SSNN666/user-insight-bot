@@ -177,3 +177,28 @@ class TestWeeklyReportApi:
         reports = r2.json()["reports"]
         assert len(reports) == 1
         assert reports[0]["content"] == body["content"]
+
+
+class TestExportExcelApi:
+    """Excel 导出端点:FileResponse 下载 + 非法参数 400。"""
+
+    def test_export_tasks_ok(self, client):
+        import watcher.task_manager as tm_mod
+        tm_mod._task_manager = None
+        r = client.get("/api/export/excel", params={"dataset": "tasks"})
+        assert r.status_code == 200
+        assert "spreadsheetml" in r.headers.get("content-type", "")
+        assert r.content[:2] == b"PK"                 # xlsx = zip 魔数
+        cd = r.headers.get("content-disposition", "")
+        assert "tasks_" in cd and ".xlsx" in cd
+
+    def test_export_funnel_with_days(self, client):
+        r = client.get("/api/export/excel", params={"dataset": "funnel", "days": 30})
+        # funnel 真实加载 JData 可能慢但可接受;这里只验证 200
+        assert r.status_code == 200
+        assert r.content[:2] == b"PK"
+
+    def test_unknown_dataset_400(self, client):
+        r = client.get("/api/export/excel", params={"dataset": "nope"})
+        assert r.status_code == 400
+        assert "未知数据集" in r.json()["detail"]

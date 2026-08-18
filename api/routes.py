@@ -7,7 +7,8 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from agent.agent import ask_agent, _ask_agent_internal
@@ -438,6 +439,32 @@ async def debug_get_weekly_report():
     from watcher.weekly_report import list_recent_reports
     reports = list_recent_reports(limit=1)
     return {"status": "ok", "reports": reports}
+
+
+# ── Excel 导出(管理台"一键拉数")──────────────────────────────
+
+
+@router.get("/api/export/excel")
+async def export_excel(
+    dataset: str,
+    days: int = Query(default=7, ge=1, le=90, description="漏斗窗口天数"),
+    status: str | None = Query(default=None, description="任务状态过滤"),
+):
+    """导出指定数据集为 .xlsx 文件下载。
+
+    dataset: segment_stats / segment_trend / segment_growth /
+             funnel / tasks / weekly_report
+    """
+    from common.exporter import export_dataset, DATASETS
+    try:
+        filename, path = export_dataset(dataset, days=days, status=status)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return FileResponse(
+        path,
+        filename=filename,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 # ── 商品图像解析 (VL 扩展, Phase: 加分项) ──────────────────
