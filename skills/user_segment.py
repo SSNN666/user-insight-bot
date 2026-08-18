@@ -119,6 +119,13 @@ def invalidate_pipeline_cache() -> None:
     cache = TTLCache(namespace="orders")
     cache.invalidate("orders_joined")
     cache.invalidate("rfm_from_db")
+
+    # 联动清空漏斗行为缓存(否则 reset-mock 后漏斗仍显示旧数据)
+    try:
+        from pipeline.funnel import invalidate_funnel_cache
+        invalidate_funnel_cache()
+    except Exception:
+        pass
     logger.info("pipeline_cache_invalidated")
 
 
@@ -535,6 +542,10 @@ def register_all_skills() -> None:
     SkillRegistry.register(SegmentGrowthSkill())
     SkillRegistry.register(SegmentTrendSkill())
     SkillRegistry.register(RefreshPipelineSkill())
+
+    # ── 转化漏斗(行为流 → 浏览/加购/下单 逐级转化率)──
+    from skills.funnel import FunnelAnalysisSkill
+    SkillRegistry.register(FunnelAnalysisSkill())
 
     # ── VL 扩展:商品图像解析(不进 Agent 工具绑定名单,由上传接口直接调用)──
     from skills.product_image import ProductImageSkill

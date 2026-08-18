@@ -73,3 +73,31 @@ class TestCombination:
                 for i in range(30)]
         c = build_charts_from_skills([_sr(rows)], {})[0]
         assert len(c["categories"]) <= 24
+
+
+class TestFunnelChart:
+    FUNNEL_ROWS = [
+        {"step": "浏览", "user_count": 1475, "conversion_rate": 1.0},
+        {"step": "加购", "user_count": 1056, "conversion_rate": 0.72},
+        {"step": "下单", "user_count": 1000, "conversion_rate": 0.95},
+    ]
+
+    def test_funnel_rows_become_bar(self):
+        charts = build_charts_from_skills([_sr(self.FUNNEL_ROWS)], {})
+        assert len(charts) == 1
+        c = charts[0]
+        assert c["type"] == "bar"
+        assert c["title"] == "转化漏斗(浏览→加购→下单)"
+        assert c["categories"] == ["浏览", "加购", "下单"]
+        assert [s["name"] for s in c["series"]] == ["用户数", "转化率(%)"]
+        assert c["series"][0]["data"] == [1475, 1056, 1000]
+        assert c["series"][1]["data"] == [100.0, 72.0, 95.0]
+
+    def test_funnel_preferred_over_stats_in_first_slot(self):
+        charts = build_charts_from_skills([_sr(self.FUNNEL_ROWS), _sr(STATS_ROWS)], NAMES)
+        assert charts[0]["title"].startswith("转化漏斗")
+
+    def test_funnel_then_trend_gives_two_charts(self):
+        charts = build_charts_from_skills([_sr(self.FUNNEL_ROWS), _sr(TREND_ROWS)], NAMES)
+        assert [c["type"] for c in charts] == ["bar", "line"]
+        assert charts[0]["categories"] == ["浏览", "加购", "下单"]

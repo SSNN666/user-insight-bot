@@ -290,6 +290,7 @@ def _llm_decide_node(state: AgentState) -> dict:
             "get_user_segment_stats", "get_segment_rules",
             "get_high_value_users", "get_segment_growth",
             "get_segment_trend",
+            "get_funnel_analysis",
             "refresh_pipeline", "get_personal_recommendations",
         ]
     llm_with_tools = _build_llm_with_tools(scoped_names)

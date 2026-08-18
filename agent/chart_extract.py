@@ -11,6 +11,7 @@
 规则(纯函数,可单测):
   - 分群统计行(segment + 用户数/平均消费)→ bar:各分群人数与平均消费(业务名标注);
   - 快照时序行(timestamp + segment + user_count)→ line:分群人数时间趋势;
+  - 漏斗行(step + user_count + conversion_rate)→ bar:浏览/加购/下单 用户数;
   - 环比明细行(user_count_delta 等)→ 不做图(表格更适合);
   - 数据点/分群数超上限自动截断,避免撑爆前端。
 """
@@ -83,6 +84,27 @@ def _trend_line_chart(rows: list[dict], names: dict) -> dict | None:
     }
 
 
+def _funnel_bar_chart(rows: list[dict]) -> dict | None:
+    """[{'step':'浏览','user_count':1200,'conversion_rate':1.0},...] → bar 图。"""
+    usable = [
+        r for r in rows
+        if isinstance(r, dict) and "step" in r and r.get("user_count") is not None
+        and "conversion_rate" in r
+    ]
+    if not usable:
+        return None
+    usable = usable[:MAX_CATEGORIES]
+    return {
+        "type": "bar",
+        "title": "转化漏斗(浏览→加购→下单)",
+        "categories": [str(r["step"]) for r in usable],
+        "series": [
+            {"name": "用户数", "data": [int(r["user_count"]) for r in usable]},
+            {"name": "转化率(%)", "data": [round(r["conversion_rate"] * 100, 1) for r in usable]},
+        ],
+    }
+
+
 def build_charts_from_skills(skill_results: list[Any], names: dict | None = None) -> list[dict]:
     """从一轮 SkillResult 中提取图表(规则驱动,最多 2 张,避免刷屏)。"""
     names = names or {}
@@ -92,6 +114,10 @@ def build_charts_from_skills(skill_results: list[Any], names: dict | None = None
         if not isinstance(data, list) or not data:
             continue
         if charts == []:
+            funnel = _funnel_bar_chart(data)
+            if funnel:
+                charts.append(funnel)
+                continue
             bar = _stats_bar_chart(data, names)
             if bar:
                 charts.append(bar)

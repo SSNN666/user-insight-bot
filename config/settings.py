@@ -140,6 +140,7 @@ class Settings(BaseSettings):
         "get_segment_rules": True,
         "get_high_value_users": True,
         "refresh_pipeline": True,
+        "get_funnel_analysis": True,
     }
 
     # ── Agent ──
