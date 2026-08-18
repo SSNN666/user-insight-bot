@@ -121,6 +121,14 @@ def _load_jdata_actions() -> pd.DataFrame | None:
     raw["user_id"] = raw["user_id"].astype(int)
     raw["date"] = pd.to_datetime(raw["time"], errors="coerce")
     raw = raw[raw["date"].notna()]
+    # 时间线平移:与订单数据同口径(最新 = 今天-1),保证"最近 N 天"窗口一致
+    try:
+        from pipeline.data_loader import jdata_date_shift
+        shift = jdata_date_shift(raw["date"])
+        if shift != pd.Timedelta(0):
+            raw["date"] = raw["date"] + shift
+    except Exception:
+        pass
     return raw[["user_id", "type", "date"]].rename(columns={"type": "action_type"})
 
 

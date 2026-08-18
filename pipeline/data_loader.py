@@ -132,6 +132,22 @@ JDATA_ACTION_TYPE_ORDER = 4      # 官方行为编码:1=浏览 2=加购 3=删除
 JDATA_SEX_MAP = {0: "男", 1: "女", 2: "保密"}
 
 
+def jdata_date_shift(dates: "pd.Series") -> pd.Timedelta:
+    """JData 数据平移到当前时间线:让数据最新日期 = 今天 - 1 天。
+
+    原始 JData 是 2016-02~04 的历史数据;运行时订单(商城)是真实系统时间。
+    两者若在同一 RFM 里,基准日会被 2026 年订单拉走 → 全部 JData 用户
+    recency 变成 3000+ 天,分群失真。平移后:JData 代表"最近 ~90 天、
+    截止昨天"的订单,商城订单(今天)自然衔接 —— 下单用户 recency=1,
+    dormant 复活,漏斗"最近 N 天"与分群口径完全一致。
+    """
+    max_date = pd.to_datetime(dates, errors="coerce").max()
+    if pd.isna(max_date):
+        return pd.Timedelta(0)
+    target = pd.Timestamp.now().normalize() - pd.Timedelta(days=1)
+    return target - max_date.normalize()
+
+
 def _synth_price(cate, brand) -> float:
     """JData 无价格字段:(品类,品牌) → md5 → 50-5000 元确定性合成。"""
     h = int(hashlib.md5(f"{cate}|{brand}".encode("utf-8")).hexdigest()[:8], 16)
@@ -263,8 +279,15 @@ def load_tianchi_orders(data_dir: str | None = None, since_date: str | None = No
         df = _build_orders_from_jdata(users, actions, max_users=settings.TIANCHI_MAX_USERS)
         if df is None:
             return None
+        # 时间线平移:JData(2016)→ 当前时间线(最新 = 今天-1),注册时间同步平移
+        shift = jdata_date_shift(df["order_date"])
+        if shift != pd.Timedelta(0):
+            df["order_date"] = pd.to_datetime(df["order_date"], errors="coerce") + shift
+            df["reg_date"] = pd.to_datetime(df["reg_date"], errors="coerce") + shift
         if since_date:
             df = df[pd.to_datetime(df["order_date"], errors="coerce") > pd.Timestamp(since_date)]
+        # 合并共享存储的运行时订单(商城下单即入分析,真实日期与平移后时间线衔接)
+        df = _merge_store_orders(df)
         logger.info("tier_tianchi_success", extra={
             "dir": data_dir, "rows": len(df), "users": df["user_id"].nunique(),
         })
@@ -272,6 +295,60 @@ def load_tianchi_orders(data_dir: str | None = None, since_date: str | None = No
     except (OSError, ValueError, pd.errors.ParserError) as e:
         logger.warning("tianchi_load_failed", extra={"dir": data_dir, "error": str(e)})
         return None
+
+
+def _merge_store_orders(df: pd.DataFrame) -> pd.DataFrame:
+    """把共享存储(data_store)的运行时订单并入 JData 订单。
+
+    商城/Vue 下单的用户是 data_store 按 tianchi 模式播种的 JData 用户、
+    商品是 JData SKU → 与 CSV 天然同源,合并后这些订单进入 RFM/分群,
+    "下单即入分析"闭环成立(下单用户 recency 更新、dormant 复活)。
+    品类从共享商品索引查询;data_store 不可用时跳过合并(不阻塞主链路)。
+    """
+    try:
+        # ⚠️ 必须读模块私有状态而非 list_orders()/list_products():
+        # 懒播种期间(seed → load_orders_with_join → 本函数)调用公开入口会
+        # 再次触发 _ensure_seeded → 无限递归。_orders/_products_by_id 是
+        # 运行时数据,与播种(仅重建 users/products 索引)互不依赖。
+        import api.data_store as ds
+        store_orders = ds._orders
+        if not store_orders:
+            return df
+        try:
+            cat_by_pid = {p["product_id"]: p.get("category", "未知")
+                          for p in ds._products_by_id.values()}
+        except Exception:
+            cat_by_pid = {}
+
+        # 时序口径:JData 已平移到当前时间线(最新 = 今天-1),运行时订单
+        # 使用真实 created_at(今天)自然衔接 → 下单用户 recency=1,dormant 复活
+        extra_rows = []
+        for o in store_orders:
+            pid = o.get("product_id", 1)
+            extra_rows.append({
+                "order_id": o.get("order_id", 0),
+                "user_id": o.get("user_id", 1),
+                "product_id": pid,
+                "product_name": o.get("product_name", "未知"),
+                "category": cat_by_pid.get(pid, "未知"),
+                "price": o.get("total_amount", 0),
+                "unit_price": o.get("total_amount", 0),
+                "quantity": o.get("quantity", 1),
+                "total_amount": o.get("total_amount", 0),
+                "order_date": pd.Timestamp(o.get("created_at", pd.Timestamp.now())),
+                "reg_date": pd.NaT,
+                "age": "未知",
+                "gender": "未知",
+                "city": "未知",
+            })
+        out = pd.concat([df, pd.DataFrame(extra_rows)], ignore_index=True)
+        logger.info("tianchi_merged_store_orders", extra={
+            "store_orders": len(store_orders), "total": len(out),
+        })
+        return out
+    except Exception as e:
+        logger.debug("store_merge_skipped", extra={"error": str(e)[:150]})
+        return df
 
 
 def _try_tianchi(since_date: str | None = None) -> pd.DataFrame | None:

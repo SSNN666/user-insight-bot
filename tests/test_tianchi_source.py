@@ -9,6 +9,15 @@ from pipeline import data_loader as dl
 from errors.exceptions import DatabaseError
 
 
+@pytest.fixture(autouse=True)
+def _no_store_orders(monkeypatch):
+    """隔离共享存储订单:JData 加载会合并 data_store 运行时订单,
+    其他测试可能残留订单导致本文件行数断言漂移 → 默认置空,合并测试单独注入。
+    (合并读的是私有 _orders,避免懒播种期间递归触发公开入口。)"""
+    monkeypatch.setattr("api.data_store._orders", [])
+    yield
+
+
 def _users_df() -> pd.DataFrame:
     return pd.DataFrame({
         "user_id": [101, 102, 103],
@@ -128,8 +137,11 @@ class TestLoadTianchiOrders:
         from config.settings import get_settings
         get_settings.cache_clear()
 
-        df = dl.load_tianchi_orders(since_date="2016-02-04 12:00")
-        assert df is not None and len(df) == 1       # 只剩 02-05 那一单
+        # JData 已平移到当前时间线 → since 用平移后的日期(最新-1 天)
+        df_all = dl.load_tianchi_orders()
+        max_date = df_all["order_date"].max()
+        df = dl.load_tianchi_orders(since_date=(max_date - pd.Timedelta(days=1)).isoformat())
+        assert df is not None and len(df) == 1       # 只剩最新那一单
 
 
 class TestFallbackChainIntegration:
@@ -164,3 +176,100 @@ class TestFallbackChainIntegration:
         df = dl.load_orders_with_join()
         assert df["category"].astype(str).str.contains(
             "电子|教育|时尚|家居|生活").any()                        # mock 中文分类
+
+
+class TestMergeStoreOrders:
+    """运行时订单并入 JData(商城下单即入分析)。"""
+
+    def _setup(self, tmp_path, monkeypatch) -> str:
+        data_dir = str(tmp_path / "tianchi")
+        import os
+        os.makedirs(data_dir, exist_ok=True)
+        _users_df().to_csv(os.path.join(data_dir, "JData_User.csv"), index=False)
+        _actions_df().to_csv(os.path.join(data_dir, "JData_Action_201602.csv"),
+                             index=False)
+        monkeypatch.setenv("TIANCHI_DATA_DIR", data_dir)
+        monkeypatch.setenv("DATA_SOURCE", "tianchi")
+        from config.settings import get_settings
+        get_settings.cache_clear()
+        return data_dir
+
+    def test_store_orders_merged_into_jdata(self, tmp_path, monkeypatch):
+        """JData 用户(101.0→101)在商城的运行时订单并入 CSV 订单。"""
+        self._setup(tmp_path, monkeypatch)
+        store_orders = [{
+            "order_id": 20000, "user_id": 101, "product_id": 9001,
+            "product_name": "SKU-9001", "quantity": 2,
+            "total_amount": 500.0, "status": "已确认",
+            "created_at": "2026-08-18T10:00:00",
+        }]
+        monkeypatch.setattr("api.data_store._orders", store_orders)
+        monkeypatch.setattr("api.data_store._products_by_id", {
+            9001: {"product_id": 9001, "category": "8"},
+        })
+
+        df = dl.load_tianchi_orders()
+        assert df is not None
+        assert len(df) == 5                    # 4 条 CSV + 1 条运行时
+        row = df[df["order_id"] == 20000].iloc[0]
+        assert row["user_id"] == 101           # JData 用户
+        assert row["category"] == "8"          # 从共享商品索引查询
+        assert row["total_amount"] == 500.0
+        # 时序口径:JData 已平移到当前时间线(最新=今天-1),运行时订单用真实
+        # created_at(今天)自然衔接 → 下单用户 recency=1,dormant 复活
+        assert pd.to_datetime(row["order_date"]) == pd.Timestamp("2026-08-18T10:00:00")
+        # 合并订单是数据线最新一单(JData 平移后截至昨天,今天下单即最新)
+        assert pd.to_datetime(row["order_date"]) >= df["order_date"].max()
+
+    def test_no_store_orders_unchanged(self, tmp_path, monkeypatch):
+        """共享存储无订单 → 合并跳过,行数不变。"""
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr("api.data_store._orders", [])
+        df = dl.load_tianchi_orders()
+        assert df is not None and len(df) == 4
+
+    def test_store_unavailable_skips_merge(self, tmp_path, monkeypatch):
+        """data_store 状态异常 → 跳过合并,不阻塞主链路。"""
+        self._setup(tmp_path, monkeypatch)
+        monkeypatch.setattr("api.data_store._orders", 123)   # 非列表 → 遍历抛错
+        df = dl.load_tianchi_orders()
+        assert df is not None and len(df) == 4
+
+
+class TestJdataDateShift:
+    """时间线平移:JData(2016)→ 当前时间线(最新 = 今天-1)。"""
+
+    def test_shift_anchors_max_to_yesterday(self):
+        dates = pd.to_datetime(["2016-02-01", "2016-02-05"])
+        shift = dl.jdata_date_shift(dates)
+        target = pd.Timestamp.now().normalize() - pd.Timedelta(days=1)
+        assert dates.max() + shift == target
+
+    def test_shift_preserves_relative_spacing(self):
+        dates = pd.to_datetime(["2016-02-01", "2016-02-05"])
+        shift = dl.jdata_date_shift(dates)
+        shifted = dates + shift
+        assert (shifted[1] - shifted[0]) == pd.Timedelta(days=4)   # 相对间隔不变
+
+    def test_empty_or_na_dates_zero_shift(self):
+        assert dl.jdata_date_shift(pd.Series(dtype="datetime64[ns]")) == pd.Timedelta(0)
+        assert dl.jdata_date_shift(pd.Series([pd.NaT])) == pd.Timedelta(0)
+
+    def test_load_shifts_order_dates_to_2026(self, tmp_path, monkeypatch):
+        """加载后 JData 订单日期落在当前时间线(2026),而非 2016。"""
+        data_dir = str(tmp_path / "tianchi")
+        import os
+        os.makedirs(data_dir, exist_ok=True)
+        _users_df().to_csv(os.path.join(data_dir, "JData_User.csv"), index=False)
+        _actions_df().to_csv(os.path.join(data_dir, "JData_Action_201602.csv"),
+                             index=False)
+        monkeypatch.setenv("TIANCHI_DATA_DIR", data_dir)
+        from config.settings import get_settings
+        get_settings.cache_clear()
+
+        df = dl.load_tianchi_orders()
+        assert df is not None and len(df) == 4
+        max_date = df["order_date"].max()
+        assert max_date.year == pd.Timestamp.now().year        # 已平移到今年
+        assert max_date.date() == (
+            pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).date()  # 昨天
