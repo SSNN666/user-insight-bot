@@ -95,6 +95,27 @@ class TestExportDatasets:
         _, ws, _ = _read_excel(path)
         assert ws.max_row >= 1                         # 表头存在即可
 
+    def test_segment_users_multi_sheet_per_segment(self):
+        fn, path = export_dataset("segment_users")
+        wb = openpyxl.load_workbook(path)
+        # 合成 seg_df 3 个分群(0/1/2)→ 3 个 sheet
+        assert len(wb.sheetnames) == 3
+        for sid in (0, 1, 2):
+            sheet = next(s for s in wb.sheetnames if s.startswith(f"分群{sid}"))
+            ws = wb[sheet]
+            assert [c.value for c in ws[1]] == ["用户ID", "近度(天)", "频次", "消费金额", "流转标签"]
+            assert ws.max_row - 1 == 2                 # 每分群 2 人
+            assert all(isinstance(r[0].value, int) for r in ws.iter_rows(min_row=2))
+
+    def test_segment_users_empty_returns_placeholder(self, monkeypatch):
+        import skills.user_segment as us
+        monkeypatch.setattr(
+            us, "_load_and_process",
+            lambda force_refresh=False: (None, pd.DataFrame(columns=["user_id"]), None))
+        fn, path = export_dataset("segment_users")
+        wb = openpyxl.load_workbook(path)
+        assert wb.sheetnames == ["数据"]              # 空兜底 sheet
+
 
 class TestDatasetFrames:
     def test_tasks_df_status_filter(self):

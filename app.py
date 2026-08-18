@@ -899,6 +899,7 @@ def create_ui():
             gr.Markdown("### 📤 导出 Excel")
             with gr.Row():
                 export_stats_btn = gr.Button("导出分群统计")
+                export_users_btn = gr.Button("导出分群用户名单")
                 export_funnel_btn = gr.Button("导出转化漏斗(7天)")
                 export_trend_btn = gr.Button("导出分群趋势")
                 export_tasks_btn = gr.Button("导出任务列表")
@@ -913,6 +914,8 @@ def create_ui():
 
             export_stats_btn.click(
                 lambda: do_export("segment_stats"), outputs=[export_file, export_msg])
+            export_users_btn.click(
+                lambda: do_export("segment_users"), outputs=[export_file, export_msg])
             export_funnel_btn.click(
                 lambda: do_export("funnel", days=7), outputs=[export_file, export_msg])
             export_trend_btn.click(

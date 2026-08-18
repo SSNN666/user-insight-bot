@@ -7,12 +7,14 @@
   segment_stats  分群统计(含业务命名)
   segment_trend  分群人数时间趋势(最近 10 期快照)
   segment_growth 分群环比增长(最近两期快照)
+  segment_users  每个分群的用户名单(多 sheet,按分群)
   funnel         转化漏斗(days 参数,默认 7)
   tasks          自主分析任务列表(可选 status 过滤)
   weekly_report  周报(多 sheet:四节内容)
 """
 
 import os
+import re
 from datetime import datetime, timezone
 
 import pandas as pd
@@ -23,9 +25,15 @@ from log.logger import get_logger
 logger = get_logger(__name__)
 
 DATASETS = {
-    "segment_stats", "segment_trend", "segment_growth",
+    "segment_stats", "segment_trend", "segment_growth", "segment_users",
     "funnel", "tasks", "weekly_report",
 }
+
+
+def _safe_sheet_name(name: str) -> str:
+    """Excel sheet 名限制:≤31 字符,禁 []:*?/\。"""
+    cleaned = re.sub(r'[\\/*?:\[\]]', '_', str(name))
+    return cleaned[:31] or "Sheet"
 
 
 def _export_dir() -> str:
@@ -120,6 +128,35 @@ def _tasks_df(status: str | None = None) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["任务ID", "事件类型", "优先级", "状态", "时间", "摘要"])
 
 
+def _segment_users_sheets() -> dict[str, pd.DataFrame]:
+    """每个分群的用户名单(多 sheet,sheet 名 = 分群号·业务名)。
+
+    数据源为分群流水线的 RFM(含 user_id/recency/frequency/monetary/flow_tag)。
+    """
+    from skills.user_segment import _load_and_process
+    from pipeline.segment_naming import get_segment_names
+
+    _, segments, _ = _load_and_process(force_refresh=False)
+    if segments is None or segments.empty or "segment" not in segments.columns:
+        return {}
+
+    names = get_segment_names(segments)
+    sheets: dict[str, pd.DataFrame] = {}
+    for sid in sorted(segments["segment"].unique()):
+        seg_df = segments[segments["segment"] == int(sid)]
+        label = names.get(int(sid), f"分群{sid}")
+        df = pd.DataFrame({
+            "用户ID": seg_df["user_id"].astype(int),
+            "近度(天)": seg_df["recency"].round(0).astype(int),
+            "频次": seg_df["frequency"].round(2),
+            "消费金额": seg_df["monetary"].round(2),
+        })
+        if "flow_tag" in seg_df.columns:
+            df["流转标签"] = seg_df["flow_tag"].astype(str)
+        sheets[_safe_sheet_name(f"分群{int(sid)}·{label}")] = df
+    return sheets
+
+
 def _weekly_report_sheets() -> dict[str, pd.DataFrame]:
     from watcher.weekly_report import generate_weekly_report
 
@@ -175,11 +212,14 @@ def export_dataset(dataset: str, **kwargs) -> tuple[str, str]:
     filename = f"{dataset}_{_ts()}.xlsx"
     filepath = os.path.join(_export_dir(), filename)
 
-    if dataset == "weekly_report":
-        sheets = _weekly_report_sheets()
+    if dataset in ("weekly_report", "segment_users"):
+        sheets = (_weekly_report_sheets() if dataset == "weekly_report"
+                  else _segment_users_sheets())
+        if not sheets:
+            sheets = {"数据": pd.DataFrame(columns=["提示"])}
         with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
             for name, df in sheets.items():
-                df.to_excel(writer, sheet_name=name[:31], index=False)
+                df.to_excel(writer, sheet_name=_safe_sheet_name(name), index=False)
     else:
         df = _dataset_frame(dataset, kwargs)
         with pd.ExcelWriter(filepath, engine="openpyxl") as writer:
