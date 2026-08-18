@@ -186,6 +186,10 @@ class Settings(BaseSettings):
     HIGH_VALUE_CHURN_THRESHOLD: int = 5
     ORDER_CRASH_THRESHOLD_PCT: float = 30.0
     EXTREME_OUTLIER_STD: float = 3.0
+    # 流失预警(高价值用户 N 天未下单,用户级规则,独立于快照 diff)
+    HIGH_VALUE_DORMANT_DAYS: int = 30
+    HIGH_VALUE_DORMANT_MIN_USERS: int = 5
+    HIGH_VALUE_DORMANT_COOLDOWN_SECONDS: int = 86400   # 事件级节流(用户集去重之外的次闸)
     # Dedup
     EVENT_COOLDOWN_SECONDS: int = 3600
     EVENT_MERGE_WINDOW: int = 600

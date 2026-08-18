@@ -99,7 +99,7 @@ class WatcherEngine:
         # Force-refresh pipeline → generates a new snapshot as side effect
         try:
             from skills.user_segment import _load_and_process
-            _load_and_process(force_refresh=True)
+            rfm, _, _ = _load_and_process(force_refresh=True)
         except Exception:
             logger.exception("poll_refresh_failed")
             return []
@@ -120,6 +120,23 @@ class WatcherEngine:
         # Compute diff and detect events
         diff = compute_snapshot_diff(prev, curr)
         candidates = detect_events(diff, prev, curr)
+
+        # 流失预警(用户级规则,独立于快照 diff):新增流失用户集去重(主闸)
+        # + 事件级冷却(次闸,防三阶段 orchestrator 高频触发)。
+        # HIGH_VALUE_DORMANT 是周期运营动作而非告警,节流不放在 should_suppress
+        # (其"HIGH 永不抑制"语义有既有测试守护)。
+        try:
+            from watcher.events import detect_high_value_dormant
+            from watcher import dormant_state
+            dormant = detect_high_value_dormant(
+                rfm, settings, dormant_state.load_reported())
+            if dormant is not None and not self.task_manager.is_event_in_cooldown(
+                    dormant.event_type.value,
+                    settings.HIGH_VALUE_DORMANT_COOLDOWN_SECONDS):
+                candidates.append(dormant)
+        except Exception:
+            logger.exception("dormant_detect_failed")
+
         if not candidates:
             logger.debug("poll_no_events")
             return []
@@ -161,6 +178,15 @@ class WatcherEngine:
         logger.info("task_dispatched", extra={
             "task_id": task_rec.id, "event_type": event.event_type.value,
         })
+
+        # 流失预警:任务创建成功即标记已上报用户集(dispatch 前标记,防同轮重复;
+        # 若进程恰在此前崩溃可能产生一次重复任务 —— 至少一次语义,恢复靠 retry UI)
+        if event.event_type.value == "high_value_dormant":
+            try:
+                from watcher import dormant_state
+                dormant_state.mark_reported(event.details.get("new_dormant_ids", []))
+            except Exception:
+                logger.exception("dormant_mark_failed")
 
         await self._run_task(
             task_rec,

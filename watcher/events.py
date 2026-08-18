@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 
 class EventType(StrEnum):
     HIGH_VALUE_CHURN = "high_value_churn"
+    HIGH_VALUE_DORMANT = "high_value_dormant"
     ORDER_VOLUME_CRASH = "order_volume_crash"
     EXTREME_OUTLIER = "extreme_outlier"
     SEGMENT_SHIFT = "segment_shift"
@@ -307,6 +308,81 @@ def detect_events(
     return events
 
 
+# ── 流失预警(用户级规则,独立于快照 diff)────────────────────────
+
+
+def detect_high_value_dormant(
+    rfm,
+    settings,
+    prev_reported: set[int] | None = None,
+) -> WatcherEvent | None:
+    """最高价值分群中"新进入 30 天未下单"的用户数 ≥ 阈值 → HIGH 事件。
+
+    与 high_value_churn 的语义边界:后者基于快照 diff 的 flow_tag=churned
+    增量(已确认流失);前者是 recency > HIGH_VALUE_DORMANT_DAYS 的预警。
+    两个事件可同轮共存,互不干扰。
+
+    Args:
+        rfm: RFM DataFrame(含 segment / recency / user_id 列,来自分群流水线)。
+        settings: 配置(HIGH_VALUE_DORMANT_DAYS / MIN_USERS)。
+        prev_reported: 已上报过的用户集合(缺省空集 → 纯函数,便于单测)。
+            只有"新进入"的用户数 ≥ MIN_USERS 才触发,同一批用户不重复上报。
+
+    Returns:
+        HIGH 优先级的 WatcherEvent;条件不满足返回 None。
+    """
+    import pandas as pd
+
+    prev_reported = prev_reported or set()
+    if rfm is None or getattr(rfm, "empty", True):
+        return None
+    if "segment" not in rfm.columns or "recency" not in rfm.columns:
+        return None
+
+    if rfm["segment"].isna().all():
+        return None
+    max_seg = int(rfm["segment"].max())
+    high = rfm[rfm["segment"] == max_seg]
+    if high.empty:
+        return None
+
+    dormant_days = int(settings.HIGH_VALUE_DORMANT_DAYS)
+    dormant = high[high["recency"] > dormant_days]
+    total_dormant = len(dormant)
+    new_ids = [
+        int(uid) for uid in dormant["user_id"].tolist()
+        if int(uid) not in prev_reported
+    ]
+    if len(new_ids) < int(settings.HIGH_VALUE_DORMANT_MIN_USERS):
+        return None
+
+    now = datetime.now(timezone.utc).isoformat()
+    details = {
+        "top_segment": max_seg,
+        "dormant_days": dormant_days,
+        "new_dormant_count": len(new_ids),
+        "new_dormant_ids": new_ids,
+        "sample_ids": new_ids[:10],
+        "total_dormant_in_seg": total_dormant,
+    }
+    event = WatcherEvent(
+        event_id=str(uuid.uuid4()),
+        event_type=EventType.HIGH_VALUE_DORMANT,
+        priority=Priority.HIGH,
+        source_snapshot_ts=now,
+        prev_snapshot_ts="",
+        details=details,
+        virtual_query=build_virtual_query(
+            EventType.HIGH_VALUE_DORMANT, details, "", now),
+        detected_at=now,
+    )
+    logger.info("high_value_dormant_detected", extra={
+        "top_segment": max_seg, "new_count": len(new_ids),
+        "total_dormant": total_dormant, "days": dormant_days,
+    })
+    return event
+
+
 # ── Dedup / Noise ───────────────────────────────────────────────
 
 
@@ -409,6 +485,12 @@ VIRTUAL_QUERY_TEMPLATES: dict[EventType, str] = {
         "（增长 {delta_pct}%）。各分群用户数变化：{segment_breakdown}。"
         "请分析新用户的可能来源（拉新活动、自然增长等），"
         "并评估对现有分群结构的影响。"
+    ),
+    EventType.HIGH_VALUE_DORMANT: (
+        "检测到最高价值分群(segment {top_segment})中新增 {new_dormant_count} 名用户"
+        "已 {dormant_days} 天未下单，进入流失预警(用户样本: {sample_ids})。"
+        "请分析可能原因(价格、竞品、需求周期等)，并制定召回策略："
+        "触达方式、优惠力度、时间窗口。"
     ),
 }
 
