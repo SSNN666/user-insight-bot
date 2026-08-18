@@ -69,15 +69,80 @@ def _reseed() -> None:
 
 
 def _ensure_seeded() -> None:
-    """懒播种:首次访问时按数据源模式建用户/商品索引(线程安全)。"""
+    """懒播种:首次访问时按数据源模式建用户/商品索引(线程安全)。
+
+    优先从 SQLite 恢复上次会话数据(重启不丢:用户修改/新增商品/运行时
+    订单/购物车);库为空才重新播种并全量落库。
+    """
     global _seeded
     if _seeded:
         return
     with _lock:
         if _seeded:
             return
+        if _load_from_db():
+            _seeded = True
+            return
         _reseed()
+        _persist_all()
         _seeded = True
+
+
+def _load_from_db() -> bool:
+    """从 SQLite 恢复内存态(用户/商品/订单/购物车/ID 计数器)。
+
+    Returns:
+        True = 恢复成功(库中有已持久化数据);False = 库为空,走播种。
+    """
+    global _users_by_id, _products_by_id, _carts, _orders, \
+        _orders_by_id, _orders_by_user, _next_order_id, _next_product_id
+    from api import store_db
+    try:
+        if not store_db.has_data():
+            return False
+        _users_by_id = {u["user_id"]: u for u in store_db.load_users()}
+        _products_by_id = {p["product_id"]: p for p in store_db.load_products()}
+        _carts = store_db.load_carts()
+        _orders = store_db.load_orders()
+        _rebuild_order_indexes()
+        # ID 计数器恢复:取 (种子初始值, 表内 max+1) 较大者,防 delete 后退档冲突
+        _next_order_id = max(10000, max((o["order_id"] for o in _orders), default=0) + 1)
+        _next_product_id = max(1000, max(_products_by_id.keys(), default=0) + 1)
+        from log.logger import get_logger
+        get_logger(__name__).info("store_restored_from_db", extra={
+            "users": len(_users_by_id), "products": len(_products_by_id),
+            "orders": len(_orders),
+        })
+        return True
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_load_failed")
+        return False
+
+
+def _persist_all() -> None:
+    """全量落库(播种/重置后调用):用户/商品/订单/购物车 + seeded 标志。"""
+    from api import store_db
+    try:
+        store_db.init_db()
+        store_db.save_users_all(_users_by_id)
+        store_db.save_products_all(_products_by_id)
+        store_db.save_orders(_orders)
+        store_db.save_carts(_carts)
+        store_db.save_meta("seeded", "1")
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_persist_failed")
+
+
+def _persist_orders() -> None:
+    """订单变更后写穿透(订单量小,全量重写)。"""
+    from api import store_db
+    try:
+        store_db.save_orders(_orders)
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_orders_save_failed")
 
 
 def _rebuild_order_indexes() -> None:
@@ -126,6 +191,12 @@ def add_product(name: str, category: str, price: float) -> dict:
             "price": price,
         }
         _products_by_id[pid] = product
+    try:
+        from api import store_db
+        store_db.upsert_product(product)
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_product_save_failed")
     return product
 
 
@@ -134,6 +205,11 @@ def delete_product(pid: int) -> bool:
     with _lock:
         if pid in _products_by_id:
             del _products_by_id[pid]
+            try:
+                from api import store_db
+                store_db.delete_product_row(pid)
+            except Exception:
+                pass
             return True
         return False
 
@@ -170,6 +246,7 @@ def add_order(user_id: int, product_id: int, quantity: int, total_amount: float)
         }
         _orders.append(order)
         _add_order_index(order)
+    _persist_orders()
     return order
 
 
@@ -196,6 +273,12 @@ def update_user(uid: int, city: str | None = None, age: int | None = None) -> di
         u["city"] = city
     if age is not None:
         u["age"] = age
+    try:
+        from api import store_db
+        store_db.upsert_user(u)
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_user_save_failed")
     return u
 
 
@@ -219,6 +302,11 @@ def add_user_preference(uid: int, tags: dict) -> dict | None:
                         cur.append(item)
             else:
                 prefs[k] = v
+    try:
+        from api import store_db
+        store_db.upsert_user(u)
+    except Exception:
+        pass
     return u
 
 
@@ -242,6 +330,16 @@ def get_cart(user_id: int) -> dict:
     }
 
 
+def _persist_carts() -> None:
+    """购物车变更后写穿透(全量重写)。"""
+    from api import store_db
+    try:
+        store_db.save_carts(_carts)
+    except Exception:
+        from log.logger import get_logger
+        get_logger(__name__).warning("store_db_carts_save_failed")
+
+
 def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
     _ensure_seeded()
     p = get_product(product_id)
@@ -263,6 +361,7 @@ def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
                 "price": p["price"],
                 "quantity": quantity,
             })
+    _persist_carts()
     return get_cart(user_id)
 
 
@@ -273,6 +372,7 @@ def remove_from_cart(user_id: int, product_id: int) -> dict:
             _carts[user_id] = [
                 i for i in _carts[user_id] if i["product_id"] != product_id
             ]
+    _persist_carts()
     return get_cart(user_id)
 
 
@@ -280,6 +380,7 @@ def clear_cart(user_id: int) -> None:
     _ensure_seeded()
     with _lock:
         _carts[user_id] = []
+    _persist_carts()
 
 
 # ── Checkout ─────────────────────────────────────────────────────
@@ -314,6 +415,8 @@ def checkout(user_id: int) -> dict:
         _orders.append(order)
         _add_order_index(order)
         _carts[user_id] = []
+    _persist_orders()
+    _persist_carts()
     return order
 
 
@@ -342,6 +445,8 @@ def create_order_from_items(user_id: int, items: list[dict]) -> dict:
         _orders.append(order)
         _add_order_index(order)
         _carts.pop(user_id, None)  # clear cart after order
+    _persist_orders()
+    _persist_carts()
     return order
 
 
@@ -352,20 +457,27 @@ def pay_order(order_id: int) -> dict | None:
     order = _orders_by_id.get(order_id)
     if order is not None:
         order["status"] = "已支付"
+        _persist_orders()
     return order
 
 
 # ── Reset ────────────────────────────────────────────────────────
 
 def reset_all() -> dict:
-    """按数据源模式重播种子(与懒播种同口径)并清空 carts/orders。"""
+    """清空持久化 → 按数据源模式重播种子(与懒播种同口径)并清空 carts/orders。"""
     global _carts, _orders, _seeded
+    from api import store_db
+    try:
+        store_db.clear_all()
+    except Exception:
+        pass
     with _lock:
         _reseed()
         _carts = {}
         _orders = []
         _rebuild_order_indexes()
         _seeded = True
+        _persist_all()
     return {
         "users": len(_users_by_id),
         "products": len(_products_by_id),

@@ -356,6 +356,43 @@ def _try_tianchi(since_date: str | None = None) -> pd.DataFrame | None:
     return load_tianchi_orders(since_date=since_date)
 
 
+def data_fingerprint() -> str:
+    """订单数据变化指纹(纯函数,Watcher 增量重算用)。
+
+    覆盖三类变化源:
+      1. 数据源切换(DATA_SOURCE);
+      2. JData CSV 文件更新(mtime);
+      3. 共享存储运行时订单(商城下单)—— 数量 + 最新订单时间。
+
+    读 data_store 私有 _orders(与 _merge_store_orders 同理由:避免懒播种
+    期间调用公开入口触发递归)。指纹不变 → 流水线无需强制重算(TTL 兜底)。
+    """
+    import hashlib
+
+    settings = get_settings()
+    parts = [f"src={settings.DATA_SOURCE}"]
+
+    if settings.DATA_SOURCE == "tianchi":
+        try:
+            found = _find_jdata_files(settings.TIANCHI_DATA_DIR)
+            mt = [os.path.getmtime(os.path.join(settings.TIANCHI_DATA_DIR, f))
+                  for f in found["action"] if f]
+            if mt:
+                parts.append(f"csv={max(mt):.0f}")
+        except OSError:
+            pass
+
+    try:
+        import api.data_store as ds
+        parts.append(f"orders={len(ds._orders)}")
+        if ds._orders:
+            parts.append(f"last={ds._orders[-1].get('created_at', '')}")
+    except Exception:
+        pass
+
+    return hashlib.md5("|".join(parts).encode("utf-8")).hexdigest()[:16]
+
+
 # ── Tier 3: mock data ───────────────────────────────────────────
 
 

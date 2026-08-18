@@ -35,6 +35,7 @@ class WatcherEngine:
         self._running = False
         self._thread_pool: ThreadPoolExecutor | None = None
         self._llm_semaphore: asyncio.Semaphore | None = None
+        self._last_fingerprint: str | None = None   # 数据指纹(增量重算:None=首次全量)
 
     async def start(self) -> None:
         """Resume pending tasks, then enter the polling loop."""
@@ -96,10 +97,19 @@ class WatcherEngine:
         """Execute one full poll cycle. Returns newly created task records."""
         settings = get_settings()
 
-        # Force-refresh pipeline → generates a new snapshot as side effect
+        # 增量重算:数据指纹不变 → 复用缓存(TTL 兜底,不强制重算);
+        # 指纹变化(商城下单/CSV 更新/换数据源)→ force_refresh 全量重算
         try:
+            from pipeline.data_loader import data_fingerprint
             from skills.user_segment import _load_and_process
-            rfm, _, _ = _load_and_process(force_refresh=True)
+            fp = data_fingerprint()
+            refresh = (fp != self._last_fingerprint)
+            rfm, _, _ = _load_and_process(force_refresh=refresh)
+            self._last_fingerprint = fp
+            if refresh:
+                logger.info("poll_full_refresh", extra={"fingerprint": fp})
+            else:
+                logger.debug("poll_fingerprint_hit", extra={"fingerprint": fp})
         except Exception:
             logger.exception("poll_refresh_failed")
             return []

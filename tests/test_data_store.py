@@ -299,3 +299,87 @@ class TestSeedDataSource:
         assert len(ds.list_users()) > 0
         assert len(ds.list_products()) > 0
         ds.reset_all()   # 幂等
+
+
+# ══════════════════════════════════════════════════════════════════
+# SQLite 持久化(写穿透,重启恢复)
+# ══════════════════════════════════════════════════════════════════
+
+class TestPersistence:
+    def _simulate_restart(self):
+        """清空内存态 + 重置 _seeded → 下次访问触发 _load_from_db(模拟重启)。"""
+        import api.data_store as ds
+        ds._seeded = False
+        ds._users_by_id = {}
+        ds._products_by_id = {}
+        ds._carts = {}
+        ds._orders = []
+        ds._orders_by_id = {}
+        ds._orders_by_user = {}
+        ds._next_order_id = 10000
+        ds._next_product_id = 1000
+
+    def test_orders_survive_restart(self):
+        import api.data_store as ds
+        ds.reset_all()
+        o = ds.add_order(1, 1, 1, 99.0)
+        self._simulate_restart()
+        ds.list_orders()                       # 触发恢复
+        assert len(ds.list_orders()) == 1
+        assert ds.list_orders()[0]["order_id"] == o["order_id"]
+        assert ds.list_orders()[0]["total_amount"] == 99.0
+
+    def test_user_update_survives_restart(self):
+        import api.data_store as ds
+        ds.reset_all()
+        uid = ds.list_users()[0]["user_id"]
+        ds.update_user(uid, city="深圳", age=30)
+        self._simulate_restart()
+        ds.list_users()
+        u = ds.get_user(uid)
+        assert u["city"] == "深圳" and u["age"] == 30
+
+    def test_added_product_survives_restart(self):
+        import api.data_store as ds
+        ds.reset_all()
+        p = ds.add_product("持久化商品", "测试", 123.0)
+        self._simulate_restart()
+        ds.list_products()
+        assert ds.get_product(p["product_id"])["price"] == 123.0
+
+    def test_deleted_product_stays_deleted(self):
+        import api.data_store as ds
+        ds.reset_all()
+        p = ds.add_product("将被删除", "测试", 1.0)
+        ds.delete_product(p["product_id"])
+        self._simulate_restart()
+        ds.list_products()
+        assert ds.get_product(p["product_id"]) is None
+
+    def test_order_ids_do_not_collide_after_restart(self):
+        import api.data_store as ds
+        ds.reset_all()
+        o1 = ds.add_order(1, 1, 1, 10.0)
+        o2 = ds.add_order(2, 1, 1, 20.0)
+        self._simulate_restart()
+        ds.list_orders()
+        o3 = ds.add_order(3, 1, 1, 30.0)
+        assert o3["order_id"] not in (o1["order_id"], o2["order_id"])
+        assert o3["order_id"] > o2["order_id"]
+
+    def test_cart_survives_restart(self):
+        import api.data_store as ds
+        ds.reset_all()
+        ds.add_to_cart(1, 1, quantity=3)
+        self._simulate_restart()
+        c = ds.get_cart(1)
+        assert c["item_count"] == 1 and c["items"][0]["quantity"] == 3
+
+    def test_reset_clears_persisted_orders(self):
+        import api.data_store as ds
+        from api import store_db
+        ds.reset_all()
+        ds.add_order(1, 1, 1, 50.0)
+        ds.reset_all()
+        assert ds.list_orders() == []
+        assert store_db.load_orders() == []     # 库也清了
