@@ -227,3 +227,75 @@ class TestThreadSafety:
 
         assert len(errors) == 0
         assert len(oids) == len(set(oids))
+
+
+# ══════════════════════════════════════════════════════════════════
+# 播种数据源(懒播种:JData 模式 → JData 数据面,与分群分析统一)
+# ══════════════════════════════════════════════════════════════════
+
+class TestSeedDataSource:
+    def _jdata_df(self):
+        import pandas as pd
+        return pd.DataFrame({
+            "order_id": [1, 2],
+            "user_id": [200001, 200002],
+            "product_id": [9001, 9002],
+            "product_name": ["SKU-9001", "SKU-9002"],
+            "category": ["8", "8"],
+            "price": [100.0, 200.0],
+            "unit_price": [100.0, 200.0],
+            "quantity": [1, 1],
+            "total_amount": [100.0, 200.0],
+            "order_date": pd.to_datetime(["2016-02-01", "2016-02-02"]),
+            "reg_date": pd.to_datetime(["2016-01-01", "2016-01-02"]),
+            "age": ["26-35岁", "36-45岁"],
+            "gender": ["男", "女"],
+            "city": ["未知", "未知"],
+        })
+
+    def test_tianchi_mode_seeds_from_jdata(self, monkeypatch):
+        """DATA_SOURCE=tianchi → 用户/商品来自 JData(与分群同数据面)。"""
+        from config.settings import get_settings
+        from api import data_store as ds
+        monkeypatch.setenv("DATA_SOURCE", "tianchi")
+        get_settings.cache_clear()
+        monkeypatch.setattr(
+            "pipeline.data_loader.load_orders_with_join", lambda: self._jdata_df())
+        ds.reset_all()
+        try:
+            users = ds.list_users()
+            products = ds.list_products()
+            assert {u["user_id"] for u in users} == {200001, 200002}
+            assert {p["product_id"] for p in products} == {9001, 9002}
+            assert users[0]["city"] == "未知"        # JData 无城市字段
+        finally:
+            # 显式恢复 mock 种子,防污染其他测试(不依赖 fixture 清理顺序)
+            monkeypatch.setenv("DATA_SOURCE", "auto")
+            get_settings.cache_clear()
+            ds.reset_all()
+
+    def test_jdata_load_failure_falls_back_mock(self, monkeypatch):
+        """JData 加载失败 → 回退 mock,不阻塞服务。"""
+        from config.settings import get_settings
+        from api import data_store as ds
+        monkeypatch.setenv("DATA_SOURCE", "tianchi")
+        get_settings.cache_clear()
+
+        def _boom():
+            raise RuntimeError("jdata unavailable")
+        monkeypatch.setattr("pipeline.data_loader.load_orders_with_join", _boom)
+        ds.reset_all()
+        try:
+            assert len(ds.list_users()) > 0          # mock 兜底
+        finally:
+            monkeypatch.setenv("DATA_SOURCE", "auto")
+            get_settings.cache_clear()
+            ds.reset_all()
+
+    def test_default_mock_seed_still_works(self):
+        """默认(auto)模式行为不变:mock 种子。"""
+        from api import data_store as ds
+        ds.reset_all()
+        assert len(ds.list_users()) > 0
+        assert len(ds.list_products()) > 0
+        ds.reset_all()   # 幂等

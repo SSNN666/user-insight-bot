@@ -29,6 +29,8 @@ def _isolated_settings(monkeypatch):
     monkeypatch.setenv("WATCHER_ENABLED", "false")
     monkeypatch.setenv("FLYWHEEL_ENABLED", "false")
     monkeypatch.setenv("WEEKLY_REPORT_ENABLED", "false")   # 防 TestClient lifespan 起后台任务
+    # 测试统一走 mock 数据面(否则 .env 的 tianchi 会导致 data_store 播种读 2.2GB JData)
+    monkeypatch.setenv("DATA_SOURCE", "auto")
     monkeypatch.setenv("LLM_MODEL_NAME", "qwen2.5:7b")
 
     # 统一适配器:测试不触发任何真实 LLM 调用(云 Key 置空 + 禁用本地兜底

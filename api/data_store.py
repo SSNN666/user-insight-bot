@@ -19,9 +19,10 @@ from pipeline.data_loader import generate_mock_orders
 
 _lock = threading.RLock()
 
-# ── Seed from mock data ──────────────────────────────────────────
+# ── Seed(懒播种:首次访问时按数据源模式建索引)──────────────────
 
-_df = generate_mock_orders()
+_df: pd.DataFrame | None = None          # 播种数据源(纯 mock 或 JData 降级链)
+_seeded: bool = False                    # 首次访问时播种,避免 import 即全量加载
 
 _users_by_id: dict[int, dict] = {}
 _products_by_id: dict[int, dict] = {}
@@ -34,7 +35,7 @@ _next_product_id: int = 1000
 
 
 def _seed_from_df() -> None:
-    """(Re-)build indexes from the mock DataFrame."""
+    """(Re-)build indexes from the seed DataFrame."""
     global _users_by_id, _products_by_id
     _users_by_id = {}
     for u in _df[["user_id", "age", "city"]].drop_duplicates().to_dict(orient="records"):
@@ -44,7 +45,39 @@ def _seed_from_df() -> None:
         _products_by_id[p["product_id"]] = p
 
 
-_seed_from_df()
+def _reseed() -> None:
+    """按数据源模式重播种子(调用方需持锁):
+    DATA_SOURCE == "tianchi" → JData 真实数据(与分群分析同数据面);
+    否则 → mock 合成数据。JData 加载失败回退 mock。
+    """
+    global _df, _next_order_id, _next_product_id
+    from config.settings import get_settings
+    settings = get_settings()
+    if settings.DATA_SOURCE == "tianchi":
+        try:
+            from pipeline.data_loader import load_orders_with_join
+            _df = load_orders_with_join()
+        except Exception:
+            from log.logger import get_logger
+            get_logger(__name__).warning("seed_tianchi_failed_fallback_mock")
+            _df = generate_mock_orders()
+    else:
+        _df = generate_mock_orders()
+    _seed_from_df()
+    _next_order_id = 10000
+    _next_product_id = 1000
+
+
+def _ensure_seeded() -> None:
+    """懒播种:首次访问时按数据源模式建用户/商品索引(线程安全)。"""
+    global _seeded
+    if _seeded:
+        return
+    with _lock:
+        if _seeded:
+            return
+        _reseed()
+        _seeded = True
 
 
 def _rebuild_order_indexes() -> None:
@@ -78,10 +111,12 @@ def _next_pid() -> int:
 # ── Product helpers ──────────────────────────────────────────────
 
 def get_product(pid: int) -> dict | None:
+    _ensure_seeded()
     return _products_by_id.get(pid)
 
 
 def add_product(name: str, category: str, price: float) -> dict:
+    _ensure_seeded()
     with _lock:
         pid = _next_pid()
         product = {
@@ -95,6 +130,7 @@ def add_product(name: str, category: str, price: float) -> dict:
 
 
 def delete_product(pid: int) -> bool:
+    _ensure_seeded()
     with _lock:
         if pid in _products_by_id:
             del _products_by_id[pid]
@@ -103,6 +139,7 @@ def delete_product(pid: int) -> bool:
 
 
 def list_products() -> list[dict]:
+    _ensure_seeded()
     return list(_products_by_id.values())
 
 
@@ -137,6 +174,7 @@ def add_order(user_id: int, product_id: int, quantity: int, total_amount: float)
 
 
 def list_orders(user_id: int | None = None) -> list[dict]:
+    _ensure_seeded()
     if user_id is not None:
         return _orders_by_user.get(user_id, [])
     return _orders
@@ -145,10 +183,12 @@ def list_orders(user_id: int | None = None) -> list[dict]:
 # ── User helpers ─────────────────────────────────────────────────
 
 def get_user(uid: int) -> dict | None:
+    _ensure_seeded()
     return _users_by_id.get(uid)
 
 
 def update_user(uid: int, city: str | None = None, age: int | None = None) -> dict | None:
+    _ensure_seeded()
     u = _users_by_id.get(uid)
     if u is None:
         return None
@@ -165,6 +205,7 @@ def add_user_preference(uid: int, tags: dict) -> dict | None:
     tags: {"category": str, "appearance": str, "tags": [str], ...}
     列表类字段按去重追加,标量字段覆盖。
     """
+    _ensure_seeded()
     u = _users_by_id.get(uid)
     if u is None:
         return None
@@ -182,12 +223,14 @@ def add_user_preference(uid: int, tags: dict) -> dict | None:
 
 
 def list_users() -> list[dict]:
+    _ensure_seeded()
     return list(_users_by_id.values())
 
 
 # ── Cart helpers ─────────────────────────────────────────────────
 
 def get_cart(user_id: int) -> dict:
+    _ensure_seeded()
     with _lock:
         items = list(_carts.get(user_id, []))
     total = sum(i["price"] * i["quantity"] for i in items)
@@ -200,6 +243,7 @@ def get_cart(user_id: int) -> dict:
 
 
 def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
+    _ensure_seeded()
     p = get_product(product_id)
     if not p:
         return get_cart(user_id)
@@ -223,6 +267,7 @@ def add_to_cart(user_id: int, product_id: int, quantity: int = 1) -> dict:
 
 
 def remove_from_cart(user_id: int, product_id: int) -> dict:
+    _ensure_seeded()
     with _lock:
         if user_id in _carts:
             _carts[user_id] = [
@@ -232,6 +277,7 @@ def remove_from_cart(user_id: int, product_id: int) -> dict:
 
 
 def clear_cart(user_id: int) -> None:
+    _ensure_seeded()
     with _lock:
         _carts[user_id] = []
 
@@ -239,6 +285,7 @@ def clear_cart(user_id: int) -> None:
 # ── Checkout ─────────────────────────────────────────────────────
 
 def checkout(user_id: int) -> dict:
+    _ensure_seeded()
     with _lock:
         items = _carts.get(user_id, [])
         if not items:
@@ -278,6 +325,7 @@ def create_order_from_items(user_id: int, items: list[dict]) -> dict:
 
     Each item dict must have: product_id, product_name, price, quantity.
     """
+    _ensure_seeded()
     if not items:
         raise ValueError("购物车为空")
     total = sum(i["price"] * i["quantity"] for i in items)
@@ -300,6 +348,7 @@ def create_order_from_items(user_id: int, items: list[dict]) -> dict:
 # ── Payment ──────────────────────────────────────────────────────
 
 def pay_order(order_id: int) -> dict | None:
+    _ensure_seeded()
     order = _orders_by_id.get(order_id)
     if order is not None:
         order["status"] = "已支付"
@@ -309,16 +358,14 @@ def pay_order(order_id: int) -> dict | None:
 # ── Reset ────────────────────────────────────────────────────────
 
 def reset_all() -> dict:
-    """Re-seed all stores from mock data and clear carts/orders."""
-    global _df, _carts, _orders, _next_order_id, _next_product_id
+    """按数据源模式重播种子(与懒播种同口径)并清空 carts/orders。"""
+    global _carts, _orders, _seeded
     with _lock:
-        _df = generate_mock_orders()
-        _seed_from_df()
+        _reseed()
         _carts = {}
         _orders = []
         _rebuild_order_indexes()
-        _next_order_id = 10000
-        _next_product_id = 1000
+        _seeded = True
     return {
         "users": len(_users_by_id),
         "products": len(_products_by_id),
