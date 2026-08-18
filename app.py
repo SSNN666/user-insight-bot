@@ -267,13 +267,6 @@ def debug_update_user(uid, city, age):
     except Exception as e:
         return f"❌ {e}"
 
-def debug_reset_mock():
-    try:
-        r = _post("/debug/reset-mock", {})
-        return f"✅ 数据已重置 — {r.get('users')} 用户, {r.get('segments')} 分群"
-    except Exception as e:
-        return f"❌ {e}"
-
 def debug_list_products_df():
     """返回当前共享存储中的商品列表"""
     try:
@@ -777,7 +770,6 @@ def create_ui():
                     usr_result = gr.Textbox(label="操作结果", interactive=False)
 
             with gr.Row():
-                reset_btn = gr.Button("🔄 一键重置模拟数据集", variant="secondary")
                 trigger_btn = gr.Button("⚡ 手动触发事件检测", variant="secondary")
                 refresh_data_btn = gr.Button("🔍 刷新数据预览", variant="secondary")
             debug_result = gr.Textbox(label="系统操作结果", interactive=False)
@@ -797,7 +789,6 @@ def create_ui():
                     gr.Markdown("**用户列表**")
                     user_table = gr.Dataframe(label="用户", interactive=False, headers=["用户ID", "年龄", "城市"], wrap=True)
 
-            reset_btn.click(debug_reset_mock, outputs=debug_result)
             trigger_btn.click(debug_trigger_event, outputs=debug_result)
             add_btn.click(debug_add_product, [prod_name, prod_cat, prod_price], prod_result)
             del_btn.click(debug_delete_product, del_pid, prod_result)

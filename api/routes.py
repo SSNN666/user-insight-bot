@@ -73,13 +73,6 @@ class OrderCreateResponse(BaseModel):
     order_id: int = Field(examples=[10001])
 
 
-class ResetMockResponse(BaseModel):
-    status: str = Field(examples=["ok"])
-    users: int = Field(examples=[132])
-    segments: int = Field(examples=[4])
-    products: int = Field(examples=[50])
-
-
 class HealthResponse(BaseModel):
     status: str
     version: str
@@ -386,30 +379,6 @@ async def debug_update_user(user_id: int, req: UserUpdate):
     if result is None:
         raise HTTPException(status_code=404, detail="用户不存在")
     return {"user_id": user_id, "updates": result}
-
-
-@router.post("/debug/reset-mock", response_model=ResetMockResponse)
-async def debug_reset_mock():
-    from api.data_store import reset_all
-    from skills.user_segment import invalidate_pipeline_cache, _load_and_process
-    from flywheel.vector_store import reset_vector_store
-
-    # Reset in-memory stores
-    store_info = reset_all()
-
-    # Reset pipeline cache
-    invalidate_pipeline_cache()
-    rfm, seg, rules = _load_and_process(force_refresh=True)
-
-    # Reset vector store (Milvus or in-memory)
-    reset_vector_store()
-
-    return {
-        "status": "ok",
-        "users": len(rfm),
-        "segments": int(seg['segment'].nunique()) if seg is not None else 0,
-        "products": store_info["products"],
-    }
 
 
 @router.post("/debug/trigger-event")

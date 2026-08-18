@@ -188,7 +188,7 @@ JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自�
 | AI | `POST /ask` | Agent 问答 |
 | 电商 | `/api/products`, `/api/cart`, `/api/orders` | Vue 商城后端 |
 | 推荐 | `GET /api/recommendations`, `POST /api/product-image/analyze` | 画像推荐 / 商品图像解析(VL) |
-| 调试 | `/debug/*` | CRUD + 数据重置 + 事件触发 |
+| 调试 | `/debug/*` | CRUD + 事件触发(已移除一键重置:避免清空运行时订单) |
 | 统计 | `/stats/rfm`, `/stats/segment-ratio`, `/stats/flow`, `/stats/segment-trend` | 图表数据(含分群时间趋势) |
 | Trace | `GET /traces`, `GET /traces/{id}` | Agent 执行链路 |
 | 任务 | `GET /tasks/` | 自主分析任务管理 |

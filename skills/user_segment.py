@@ -120,7 +120,7 @@ def invalidate_pipeline_cache() -> None:
     cache.invalidate("orders_joined")
     cache.invalidate("rfm_from_db")
 
-    # 联动清空漏斗行为缓存(否则 reset-mock 后漏斗仍显示旧数据)
+    # 联动清空漏斗行为缓存(否则 refresh 后漏斗仍显示旧数据)
     try:
         from pipeline.funnel import invalidate_funnel_cache
         invalidate_funnel_cache()
