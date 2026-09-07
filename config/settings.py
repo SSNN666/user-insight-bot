@@ -115,6 +115,12 @@ class Settings(BaseSettings):
     TIANCHI_DATA_DIR: str = "data/tianchi"      # JData CSV 文件目录
     TIANCHI_MAX_ACTIONS: int | None = 1_000_000 # 行为表读取行数上限(None=全量;演示建议采样)
     TIANCHI_MAX_USERS: int | None = 100_000     # 采样用户数上限(None=全量)
+    # 滚动揭晓:按墙钟日逐步露出历史窗口(第 1 天 = 最后 PREHEAT 天,之后每天 +STEP,
+    # 直到全窗口进入稳态)——让快照/Watcher 在模拟数据上也能看到真实演化。
+    # 默认关闭 = 现状行为(全窗口动态对齐),测试确定性不受影响。
+    TIANCHI_REVEAL_ENABLED: bool = False   # 滚动揭晓总开关(仅 DATA_SOURCE=tianchi 时生效)
+    TIANCHI_REVEAL_PREHEAT_DAYS: int = 30  # 第 1 天露出的原始天数(建议 ≥7,否则分群样本过小)
+    TIANCHI_REVEAL_STEP: int = 1           # 每墙钟日新增天数(>1 用于加速演示)
 
     # ── 防护(演示级) ──
     DEBUG_API_KEY: str = ""         # 演示级鉴权:/debug/* 与 /tasks/* 要求 X-API-Key 头(空=关闭)

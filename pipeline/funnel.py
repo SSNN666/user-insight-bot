@@ -121,6 +121,23 @@ def _load_jdata_actions() -> pd.DataFrame | None:
     raw["user_id"] = raw["user_id"].astype(int)
     raw["date"] = pd.to_datetime(raw["time"], errors="coerce")
     raw = raw[raw["date"].notna()]
+    # 滚动揭晓:与订单数据同口径(各消费方对自身原始时间线取最后 revealed_days 天)。
+    # 只读进度、不初始化 —— 揭晓状态由订单加载(load_tianchi_orders)首启,
+    # 漏斗先于其被调用时本次跳过,下次自愈。行为窗口可能比订单窗口长(订单后
+    # 仍有浏览),按各自时间线截断后同锚"昨天",口径一致。
+    if settings.DATA_SOURCE == "tianchi" and settings.TIANCHI_REVEAL_ENABLED:
+        try:
+            from pipeline import reveal_state
+            st = reveal_state.load_state()
+            revealed, total = int(st["revealed_days"]), int(st["total_days"])
+            if revealed > 0 and revealed < total:
+                cutoff = (raw["date"].max().normalize()
+                          - pd.Timedelta(days=revealed - 1))
+                raw = raw[raw["date"] >= cutoff]
+            elif revealed <= 0:
+                logger.debug("reveal_state_uninitialized_funnel_skip")
+        except Exception as exc:
+            logger.warning("funnel_reveal_cut_failed", extra={"error": str(exc)[:200]})
     # 时间线平移:与订单数据同口径(最新 = 今天-1),保证"最近 N 天"窗口一致
     try:
         from pipeline.data_loader import jdata_date_shift

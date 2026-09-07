@@ -148,6 +148,37 @@ def jdata_date_shift(dates: "pd.Series") -> pd.Timedelta:
     return target - max_date.normalize()
 
 
+def original_span_days(dates: "pd.Series") -> int:
+    """原始时间线跨度(天)= (max-min).days+1;空/全 NaN → 0(NaN 安全)。"""
+    parsed = pd.to_datetime(dates, errors="coerce").dropna()
+    if parsed.empty:
+        return 0
+    return int((parsed.max().normalize() - parsed.min().normalize()).days) + 1
+
+
+def apply_reveal_cut(df: "pd.DataFrame") -> "pd.DataFrame":
+    """滚动揭晓截断:保留原始时间线"最后 revealed_days 天"(推进/初始化进度)。
+
+    必须在时间线平移**之前**调用(基于原始日期);关闭开关时调用方不进入本函数。
+    状态文件缺失 → ensure_state 完成首启(预热 PREHEAT 天);窗口已到顶/数据
+    异常 → 原样返回,不截断。
+    """
+    from pipeline import reveal_state
+
+    span = original_span_days(df["order_date"])
+    if span <= 0:
+        return df
+    st = reveal_state.ensure_state(span)
+    revealed = int(st["revealed_days"])
+    logger.info("reveal_cut", extra={"revealed": revealed, "span": span,
+                                     "rows": len(df)})
+    if revealed <= 0 or revealed >= span:
+        return df
+    cutoff = (pd.to_datetime(df["order_date"], errors="coerce").max().normalize()
+              - pd.Timedelta(days=revealed - 1))
+    return df[pd.to_datetime(df["order_date"], errors="coerce") >= cutoff]
+
+
 def _synth_price(cate, brand) -> float:
     """JData 无价格字段:(品类,品牌) → md5 → 50-5000 元确定性合成。"""
     h = int(hashlib.md5(f"{cate}|{brand}".encode("utf-8")).hexdigest()[:8], 16)
@@ -279,6 +310,10 @@ def load_tianchi_orders(data_dir: str | None = None, since_date: str | None = No
         df = _build_orders_from_jdata(users, actions, max_users=settings.TIANCHI_MAX_USERS)
         if df is None:
             return None
+        # 滚动揭晓:在原始时间线上截取"最后 revealed_days 天"(保留最新尾部),
+        # 再平移 → 露出子集最新 = 今天-1,RFM 基准日口径不变。关闭时零改动。
+        if settings.DATA_SOURCE == "tianchi" and settings.TIANCHI_REVEAL_ENABLED:
+            df = apply_reveal_cut(df)
         # 时间线平移:JData(2016)→ 当前时间线(最新 = 今天-1),注册时间同步平移
         shift = jdata_date_shift(df["order_date"])
         if shift != pd.Timedelta(0):
@@ -381,6 +416,15 @@ def data_fingerprint() -> str:
                 parts.append(f"csv={max(mt):.0f}")
         except OSError:
             pass
+        # 滚动揭晓进度:窗口增长 = 数据变化(只读状态、不推进;不含
+        # last_advanced —— 稳态后日期照走,避免每天白触发一次全量重算)
+        if settings.TIANCHI_REVEAL_ENABLED:
+            try:
+                from pipeline import reveal_state
+                st = reveal_state.load_state()
+                parts.append(f"reveal={st['revealed_days']}/{st['total_days']}")
+            except Exception:
+                pass
 
     try:
         import api.data_store as ds

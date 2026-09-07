@@ -97,6 +97,17 @@ class WatcherEngine:
         """Execute one full poll cycle. Returns newly created task records."""
         settings = get_settings()
 
+        # 滚动揭晓:墙钟日变化则推进揭晓窗口(幂等,不重复推进)。
+        # 必须在 data_fingerprint() 之前执行 —— 推进后指纹变化 →
+        # 下方 force_refresh 全量重算 → 新快照 → diff 检测到真实演化。
+        if settings.DATA_SOURCE == "tianchi" and settings.TIANCHI_REVEAL_ENABLED:
+            try:
+                from pipeline import reveal_state
+                if reveal_state.maybe_advance():
+                    logger.info("reveal_advanced_by_watcher")
+            except Exception:
+                logger.exception("reveal_advance_failed")
+
         # 增量重算:数据指纹不变 → 复用缓存(TTL 兜底,不强制重算);
         # 指纹变化(商城下单/CSV 更新/换数据源)→ force_refresh 全量重算
         try:

@@ -425,6 +425,40 @@ async def debug_get_weekly_report():
     return {"status": "ok", "reports": reports}
 
 
+@router.get("/debug/reveal-status")
+async def debug_reveal_status():
+    """滚动揭晓进度(只读;未启用也可查,enabled=false)。"""
+    from pipeline import reveal_state
+    return reveal_state.describe()
+
+
+@router.post("/debug/reveal-advance")
+async def debug_reveal_advance(payload: dict | None = None):
+    """手动推进滚动揭晓窗口(演示/加速测试)。
+
+    body: {"days": N} 前推 N 天(钳到全窗口);{"reset": true} 回到预热窗口。
+    推进后清空流水线缓存,下次 stats/trigger-event 即按新窗口重算。
+    """
+    from pipeline import reveal_state
+    body = payload or {}
+    state = reveal_state.describe()
+    total = int(state["total_days"])
+    days = max(1, int(body.get("days", 1)))
+    if body.get("reset", False):
+        target = min(int(state["preheat"]), total) if total > 0 else int(state["preheat"])
+    else:
+        current = int(state["revealed_days"])
+        target = current + days if total <= 0 else min(total, current + days)
+    st = reveal_state.force_set(target)
+    # 清空内存/文件缓存,确保下一次读取按新窗口加载
+    try:
+        from skills.user_segment import invalidate_pipeline_cache
+        invalidate_pipeline_cache()
+    except Exception:
+        pass
+    return {"status": "ok", "reveal": st, "steady": total > 0 and st["revealed_days"] >= total}
+
+
 # ── Excel 导出(管理台"一键拉数")──────────────────────────────
 
 
