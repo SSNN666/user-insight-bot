@@ -80,6 +80,14 @@ class BaseSkill(ABC):
     description: str = ""
     input_schema: type[BaseModel] | None = None
 
+    # ── Skill engineering metadata ───────────────────────────
+    # 由 skills/loader.py 从 SKILL.md frontmatter 覆盖(单一事实来源=定义文件);
+    # 类属性仅作为未提供定义文件时的兜底默认值。
+    group: str = "analysis"        # 场景组:shopping | analysis
+    kind: str = "tool"             # tool=绑 Python 实现 | instruction=纯指令
+    version: str = "1.0.0"
+    tags: list[str] = []           # 发现用标签(selector 关键词匹配)
+
     def __init__(self, enabled: bool = True):
         self.enabled = enabled
         self._logger = get_logger(f"skill.{self.name}")

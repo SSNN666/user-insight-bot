@@ -48,6 +48,13 @@ class JSONCheckpointSaver(BaseCheckpointSaver):
     def _path(self, thread_id: str) -> str:
         return os.path.join(self._dir, f"{_thread_key(thread_id)}.json")
 
+    def _atomic_write(self, fpath: str, data: dict) -> None:
+        """临时文件 + rename 原子落盘:进程中途崩溃不会留下半个 JSON 文件。"""
+        tmp = f"{fpath}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        os.replace(tmp, fpath)
+
     # ── JsonPlus(typed 格式)↔ JSON 文件的桥接 ──────────
     # dumps_typed 产出 ("<tag>", bytes) 对(tag 可为 msgpack/null/string 等),
     # 可能嵌套在 dict/list 深处;bytes 不可直接 json.dump → 递归 base64 包装
@@ -152,8 +159,7 @@ class JSONCheckpointSaver(BaseCheckpointSaver):
             "saved_at": time.time(),
         }
         with self._lock:
-            with open(self._path(thread_id), "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False)
+            self._atomic_write(self._path(thread_id), payload)
         self._sweep_expired()
         return {"configurable": {
             **config.get("configurable", {}),
@@ -175,8 +181,7 @@ class JSONCheckpointSaver(BaseCheckpointSaver):
             for channel, value in writes:
                 pending.append([task_id, channel, self._dumps_typed(value)])
             data["pending_writes"] = pending
-            with open(fpath, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False)
+            self._atomic_write(fpath, data)
 
     def list(self, config=None, *, filter=None, before=None, limit=None):
         """列出各 thread 的最新 checkpoint(thread 列表场景用)。"""

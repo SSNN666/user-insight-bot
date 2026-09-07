@@ -12,7 +12,7 @@ from tenacity import (
     retry,
     stop_after_attempt,
     wait_exponential,
-    retry_if_exception_type,
+    retry_if_exception,
 )
 
 from config.settings import get_settings
@@ -127,7 +127,9 @@ class LLMClient:
         @retry(
             stop=stop_after_attempt(self.max_retries),
             wait=wait_exponential(multiplier=1, min=1, max=16),
-            retry=retry_if_exception_type(RETRYABLE),
+            # _is_retryable 过滤:仅 5xx 的 HTTPStatusError 才重试,
+            # 4xx(400/401/403/429 等)直接抛出不重试
+            retry=retry_if_exception(_is_retryable),
             reraise=True,
         )
         def _with_retry() -> dict:

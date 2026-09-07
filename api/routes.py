@@ -25,6 +25,14 @@ _ask_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ask")
 
 _session_locks: dict[str, asyncio.Lock] = {}
 _default_session_lock = asyncio.Lock()
+_SESSION_LOCKS_MAX = 512   # 防 watcher 等高频新 session 让锁表无限膨胀
+
+
+def _evict_idle_session_locks() -> None:
+    """超限时清掉未被持有的锁(正被 async with 持有的锁会跳过)。"""
+    for sid, lk in list(_session_locks.items()):
+        if not lk.locked():
+            del _session_locks[sid]
 
 
 def _get_session_lock(session_id: str) -> asyncio.Lock:
@@ -32,6 +40,8 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
         return _default_session_lock
     lock = _session_locks.get(session_id)
     if lock is None:
+        if len(_session_locks) >= _SESSION_LOCKS_MAX:
+            _evict_idle_session_locks()
         lock = _session_locks[session_id] = asyncio.Lock()
     return lock
 
@@ -39,6 +49,12 @@ def _get_session_lock(session_id: str) -> asyncio.Lock:
 def _get_censor():
     from common.content_moderation import get_censor
     return get_censor()
+
+
+async def _censor_check(text: str, task: str):
+    """内容审核是同步 httpx(3s 超时 + QPS 退避),丢线程池避免阻塞事件循环。"""
+    censor = _get_censor()
+    return await asyncio.to_thread(censor.check_text, text, task=task)
 
 # ── Pydantic models ────────────────────────────────────────────
 
@@ -162,8 +178,7 @@ async def ask(req: AskRequest):
         verdict = detect_injection(req.question)
         if verdict.blocked:
             raise HTTPException(status_code=403, detail="输入包含指令注入迹象，已拒绝处理")
-        censor = _get_censor()
-        input_check = censor.check_text(req.question, task="SHOP_QA_INPUT")
+        input_check = await _censor_check(req.question, task="SHOP_QA_INPUT")
         if not input_check.passed:
             raise HTTPException(status_code=403, detail="输入内容未通过安全审核")
 
@@ -184,7 +199,7 @@ async def ask(req: AskRequest):
             )
 
         # ── 输出防护:内容审核(fail-open)+ 注入提示附加 ──
-        output_check = censor.check_text(reply, task="SHOP_QA_OUTPUT")
+        output_check = await _censor_check(reply, task="SHOP_QA_OUTPUT")
         if not output_check.passed:
             reply = "抱歉，本次回答未通过内容安全审核，已替换为系统提示。请换个问法再试。"
         if verdict.warned:
@@ -222,7 +237,7 @@ async def ask_stream(req: AskRequest):
     # ── 输入防护:注入检测 + 内容审核(fail-open) ──
     from common.guardrails import detect_injection, WARN_NOTICE
     verdict = detect_injection(req.question)
-    input_ok = _get_censor().check_text(req.question, task="SHOP_QA_INPUT").passed
+    input_ok = (await _censor_check(req.question, task="SHOP_QA_INPUT")).passed
 
     lock = _get_session_lock(req.session_id)
 
@@ -241,7 +256,7 @@ async def ask_stream(req: AskRequest):
                     if event["event"] == "answer":
                         final_answer = event["content"]
                         # 输出审核(fail-open)
-                        if not _get_censor().check_text(final_answer, task="SHOP_QA_OUTPUT").passed:
+                        if not (await _censor_check(final_answer, task="SHOP_QA_OUTPUT")).passed:
                             final_answer = "抱歉，本次回答未通过内容安全审核，已替换为系统提示。请换个问法再试。"
                             event = dict(event, content=final_answer)
                         if verdict.warned:

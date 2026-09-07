@@ -94,7 +94,18 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS — origins from settings (Vue dev server + Gradio by default)
+    # Middleware order — Starlette's add_middleware is insert(0), so the LAST
+    # one registered is the OUTERMOST.  Register inner → outer:
+    # 5. CORS — outermost, so short-circuited responses (429/401/403) also
+    #           carry CORS headers (Vue dev server at :5173 relies on this)
+    # 4. ExceptionHandler — catch all errors → JSON
+    # 3. RequestLogger — structured JSON logging (sees rate-limited requests)
+    # 2. RateLimiter — sliding window + dedup for /ask
+    # 1. ApiKey — demo-grade auth for /debug/* + /tasks/*
+    app.add_middleware(ApiKeyMiddleware)
+    app.add_middleware(RateLimitMiddleware)
+    app.add_middleware(RequestLoggingMiddleware)
+    app.add_middleware(ExceptionHandlerMiddleware)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.CORS_ORIGINS,
@@ -102,16 +113,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-
-    # Middleware order (outermost first):
-    # 1. ExceptionHandler — catch all errors → JSON
-    # 2. ApiKey — demo-grade auth for /debug/* + /tasks/*
-    # 3. RateLimiter — sliding window + dedup for /ask
-    # 4. RequestLogger — structured JSON logging
-    app.add_middleware(ExceptionHandlerMiddleware)
-    app.add_middleware(ApiKeyMiddleware)
-    app.add_middleware(RateLimitMiddleware)
-    app.add_middleware(RequestLoggingMiddleware)
 
     app.include_router(router)
 

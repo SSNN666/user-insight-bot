@@ -118,12 +118,19 @@ def collect_from_manual(since_id: int = 0) -> list[dict]:
     return samples
 
 
-def collect_all(since_id: int = 0) -> list[dict]:
+def collect_all(cursors: dict[str, int] | None = None) -> list[dict]:
     """Aggregate all sources, dedup by ext_key across ALL samples (not just positives).
+
+    cursors: per-source incremental cursors, e.g.
+             {"feedback": int, "auto_task": int, "manual": int}.
+             三个源的 ID 空间相互独立,必须按源分别游标;共用一个游标会在
+             游标推进后永久漏采小 ID 源的新记录(id ≤ 游标且从未入库)。
+             缺省从 0 开始,重复收集由 ext_key 去重保证幂等。
 
     Queries the sample_library directly for existing ext_keys to ensure
     negatives and manual annotations are also deduplicated.
     """
+    cursors = cursors or {}
     # Query existing ext_keys directly from the DB (covers all ratings)
     existing_ids: set[str] = set()
     try:
@@ -136,9 +143,9 @@ def collect_all(since_id: int = 0) -> list[dict]:
         logger.debug("collector_dedup_fallback")
 
     all_samples = (
-        collect_from_feedback(since_id)
-        + collect_from_auto_tasks(since_id)
-        + collect_from_manual(since_id)
+        collect_from_feedback(cursors.get("feedback", 0))
+        + collect_from_auto_tasks(cursors.get("auto_task", 0))
+        + collect_from_manual(cursors.get("manual", 0))
     )
     # Dedup
     new = [s for s in all_samples if s["ext_key"] not in existing_ids]

@@ -60,6 +60,19 @@ class SkillRegistry:
         """Return LangChain tools for all enabled skills."""
         return [s.to_langchain_tool() for s in cls.get_enabled()]
 
+    # ── 场景分组查询(Skill engineering)─────────────────────
+    # 工具绑定按 group 过滤:购物场景只拿到 shopping 组,分析场景只拿
+    # analysis 组 —— 物理隔离的元数据来源(替代 agent.py 里硬编码名单)。
+
+    @classmethod
+    def get_enabled_by_group(cls, group: str) -> list["BaseSkill"]:  # noqa: F821
+        """返回某场景组下 enabled 的 Skill(双层开关:实例 + SKILL_ENABLED 配置)。"""
+        return [s for s in cls.get_enabled() if getattr(s, "group", "analysis") == group]
+
+    @classmethod
+    def get_enabled_names_by_group(cls, group: str) -> list[str]:
+        return [s.name for s in cls.get_enabled_by_group(group)]
+
     # ── Toggle helpers ───────────────────────────────────────
 
     @classmethod

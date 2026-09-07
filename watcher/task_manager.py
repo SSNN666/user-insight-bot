@@ -249,6 +249,17 @@ class TaskManager:
 
     # ── Query helpers ──────────────────────────────────────
 
+    def count_tasks(self, status: str | None = None) -> int:
+        """任务总数(分页接口的 total 语义:总条数,非本页条数)。"""
+        with self._get_conn() as conn:
+            if status is not None:
+                row = conn.execute(
+                    "SELECT COUNT(*) as cnt FROM watcher_tasks WHERE status=?", (status,)
+                ).fetchone()
+            else:
+                row = conn.execute("SELECT COUNT(*) as cnt FROM watcher_tasks").fetchone()
+            return row["cnt"] if row else 0
+
     def resume_pending(self) -> list[TaskRecord]:
         with self._get_conn() as conn:
             rows = conn.execute(
@@ -261,7 +272,7 @@ class TaskManager:
             row = conn.execute(
                 """SELECT COUNT(*) as cnt FROM watcher_tasks
                    WHERE event_type = ?
-                     AND created_at > datetime(?, '-' || ? || ' seconds')
+                     AND datetime(created_at) > datetime(?, '-' || ? || ' seconds')
                      AND status IN ('pending', 'running', 'completed')""",
                 (event_type, self._now(), cooldown_seconds),
             ).fetchone()

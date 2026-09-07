@@ -47,14 +47,14 @@ def load_funnel_actions(force_refresh: bool = False) -> pd.DataFrame:
             age = time.time() - _cached_at
             if age < settings.PIPELINE_CACHE_TTL:
                 logger.debug("funnel_cache_hit", extra={"age_seconds": round(age)})
-                return _cached_actions
+                return _cached_actions.copy()
             logger.info("funnel_cache_expired", extra={"age_seconds": round(age)})
         # Double-check:另一线程刚算完 → 复用(避免惊群)
         if not force_refresh and _cached_actions is not None and _cached_at is not None:
             age = time.time() - _cached_at
             if age < 5:
                 logger.debug("funnel_cache_race_avoided")
-                return _cached_actions
+                return _cached_actions.copy()
 
     # 慢路径(锁外计算,允许并发读)
     actions = None
@@ -76,7 +76,7 @@ def load_funnel_actions(force_refresh: bool = False) -> pd.DataFrame:
         _cached_actions = actions
         _cached_at = time.time()
     logger.info("funnel_actions_loaded", extra={"rows": len(actions)})
-    return _cached_actions
+    return _cached_actions.copy()
 
 
 def invalidate_funnel_cache() -> None:

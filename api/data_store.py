@@ -252,9 +252,10 @@ def add_order(user_id: int, product_id: int, quantity: int, total_amount: float)
 
 def list_orders(user_id: int | None = None) -> list[dict]:
     _ensure_seeded()
+    # 返回副本,防调用方原地修改污染共享索引(watcher/API 线程池并发读写)
     if user_id is not None:
-        return _orders_by_user.get(user_id, [])
-    return _orders
+        return list(_orders_by_user.get(user_id, []))
+    return list(_orders)
 
 
 # ── User helpers ─────────────────────────────────────────────────
@@ -266,13 +267,14 @@ def get_user(uid: int) -> dict | None:
 
 def update_user(uid: int, city: str | None = None, age: int | None = None) -> dict | None:
     _ensure_seeded()
-    u = _users_by_id.get(uid)
-    if u is None:
-        return None
-    if city is not None:
-        u["city"] = city
-    if age is not None:
-        u["age"] = age
+    with _lock:
+        u = _users_by_id.get(uid)
+        if u is None:
+            return None
+        if city is not None:
+            u["city"] = city
+        if age is not None:
+            u["age"] = age
     try:
         from api import store_db
         store_db.upsert_user(u)
@@ -454,10 +456,11 @@ def create_order_from_items(user_id: int, items: list[dict]) -> dict:
 
 def pay_order(order_id: int) -> dict | None:
     _ensure_seeded()
-    order = _orders_by_id.get(order_id)
-    if order is not None:
-        order["status"] = "已支付"
-        _persist_orders()
+    with _lock:
+        order = _orders_by_id.get(order_id)
+        if order is not None:
+            order["status"] = "已支付"
+            _persist_orders()
     return order
 
 

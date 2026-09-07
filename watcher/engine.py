@@ -198,10 +198,13 @@ class WatcherEngine:
             except Exception:
                 logger.exception("dormant_mark_failed")
 
+        # 会话 ID 取 DB 落库值(task_rec.session_id),与重启恢复路径
+        # (_dispatch_task_record 用同一字段)保持一致,否则首跑与恢复的
+        # Agent 会话/trace 对不上
         await self._run_task(
             task_rec,
             event.virtual_query,
-            f"auto-{event.event_id[:12]}",
+            task_rec.session_id,
             settings.MAX_AUTO_TOOL_ROUNDS,
         )
         return self.task_manager.get_task(task_rec.id)

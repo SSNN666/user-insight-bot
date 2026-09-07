@@ -32,7 +32,7 @@ def main():
     print(f"\n报告已保存: {path}")
     print(f"结果已保存: eval/results/")
 
-    # Exit code: 0 if all passed, 1 if any metric < 0.5
+    # Exit code: 0 if all passed, 1 if tool_accuracy/data_fidelity < 0.3
     m = summary.metrics
     if m.tool_accuracy < 0.3 or m.data_fidelity < 0.3:
         sys.exit(1)

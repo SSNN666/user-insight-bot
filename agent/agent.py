@@ -73,6 +73,7 @@ class AgentState(MessagesState):
     check_mode: str                       # "relaxed" | "strict"
     max_tool_rounds: int | None           # Phase 4: per-invocation override
     iteration: int
+    fact_check_retries: int               # strict 模式事实核查重试次数(独立于 reflect 轮数)
     should_continue: bool
     node_timings: dict[str, float]        # node → real elapsed ms (measured, not estimated)
     system_override: str | None           # 角色级 system prompt 覆盖(orchestrator 三角色使用)
@@ -256,8 +257,8 @@ def _llm_decide_node(state: AgentState) -> dict:
 
     # ── Select prompt template ──
     pre = state.get("preprocess_result")
+    query = (pre.original_query or "") if pre else ""
     if pre:
-        query = pre.original_query or ""
         prompt = select_prompt_template(pre.intent.value, query)
     else:
         prompt = PROMPT_DATA_STATS
@@ -281,25 +282,45 @@ def _llm_decide_node(state: AgentState) -> dict:
             "无需在回答中声明'无法生成图表',只需给出数据与分析即可。"
         )
 
-    # ── Scope tools per prompt context ──
-    # Deterministic: the LLM physically cannot call tools it can't see.
-    if effective_prompt == _SHOP:
-        scoped_names = ["search_products", "get_categories"]
-    else:
-        scoped_names = [
-            "get_user_segment_stats", "get_segment_rules",
-            "get_high_value_users", "get_segment_growth",
-            "get_segment_trend",
-            "get_funnel_analysis",
-            "refresh_pipeline", "get_personal_recommendations",
-        ]
+    # ── Scope tools per prompt context (Skill engineering) ──
+    # 组路由确定性判定:购物模板 → shopping 组,其余 → analysis 组。
+    # 绑定名单由注册表元数据推导(SKILL.md 的 group 字段),替代硬编码列表,
+    # 且 SKILL_ENABLED 双层开关在此生效 —— LLM 物理上看不到被禁用的工具。
+    group = "shopping" if effective_prompt == _SHOP else "analysis"
+    from skills import SkillRegistry
+    scoped_names = SkillRegistry.get_enabled_names_by_group(group)
+    if not scoped_names:
+        # 兜底:整组为空(定义被清空/全部禁用)时回退旧硬编码,保证可用性
+        scoped_names = (
+            ["search_products", "get_categories"] if group == "shopping"
+            else ["get_user_segment_stats", "get_segment_rules"]
+        )
     llm_with_tools = _build_llm_with_tools(scoped_names)
+
+    # ── 命中式 Skill 选择 + 渐进式披露 ──
+    # select_skills:组内按查询打分,命中的 SKILL.md 指令才注入上下文;
+    # 关闭(SKILL_SELECT_ENABLED=false)时退到旧行为:整组绑定、无披露。
+    selection = None
+    if settings.SKILL_SELECT_ENABLED and query:
+        from skills.selector import select_skills
+        selection = select_skills(group, query)
+        _emit("node_end_detail", node="llm_decide",
+              skill_selection=selection.rationale,
+              bound=len(scoped_names), disclosed=selection.disclosed)
 
     context_parts = [effective_prompt]
 
     # Inject preprocess result
     if pre and pre.intent.value != "general":
         context_parts.append(f"\n[查询分析] {pre.format_for_context()}")
+
+    # Progressive disclosure: 命中的 SKILL.md 指令注入(选择器产物,
+    # 比通用输出要求更具体,LLM 优先遵循)
+    if selection is not None and selection.disclosed:
+        from skills.selector import disclosure_block
+        block = disclosure_block(selection)
+        if block:
+            context_parts.append(f"\n{block}")
 
     # Inject 分群业务命名(运营说"高价值用户",不说"分群2")
     try:
@@ -604,6 +625,9 @@ def _fact_check_node(state: AgentState) -> dict:
         return {
             "fact_check_result": result,
             "messages": [{"role": "system", "content": correction_text}],
+            # 独立计数:LLM 不调工具直接答题时 reflect 不会执行,iteration 恒 0,
+            # 若共用它会导致重试无上限(依赖 recursion_limit 兜底抛 RecursionError)
+            "fact_check_retries": state.get("fact_check_retries", 0) + 1,
             "node_timings": _finish_node_timing(state, "fact_check", t0),
         }
     elif not result.passed and check_mode == "relaxed":
@@ -664,11 +688,11 @@ def _fact_check_condition(state: AgentState) -> Literal["llm_decide", "__end__"]
     if (
         fcr and not fcr.passed
         and check_mode == "strict"
-        and state.get("iteration", 0) < settings.FACT_CHECK_MAX_RETRIES
+        and state.get("fact_check_retries", 0) < settings.FACT_CHECK_MAX_RETRIES
     ):
         logger.info("fact_check_retry", extra={
             "violations": len(fcr.violations),
-            "iteration": state.get("iteration", 0),
+            "retries": state.get("fact_check_retries", 0),
         })
         return "llm_decide"
     return "__end__"
@@ -1030,7 +1054,9 @@ async def _ask_agent_stream(
                             final_reply = text
                     if node == "fact_check":
                         fcr = update.get("fact_check_result")
-                        iterations = update.get("iteration", 0)
+                        # fact_check 节点返回独立的 fact_check_retries 计数
+                        # (reflect 不执行时 iteration 不会递增,读它会恒为 0)
+                        iterations = update.get("fact_check_retries", 0)
                         fc_passed = bool(fcr and fcr.passed)
                         fc_violations = len(getattr(fcr, "violations", []) or [])
                         yield {

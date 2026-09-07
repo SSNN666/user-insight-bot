@@ -132,16 +132,23 @@ class Settings(BaseSettings):
     LOG_MAX_BYTES: int = 10_485_760    # 10 MB per file
     LOG_BACKUP_COUNT: int = 5
 
-    # ── Skill ──
+    # ── Skill(Skill engineering)──
     SKILL_ENABLED: dict = {
         "search_products": True,
         "get_categories": True,
         "get_user_segment_stats": True,
         "get_segment_rules": True,
         "get_high_value_users": True,
+        "get_segment_growth": True,
+        "get_segment_trend": True,
         "refresh_pipeline": True,
         "get_funnel_analysis": True,
+        "get_personal_recommendations": True,
+        "analyze_product_image": True,
     }
+    SKILLS_DEFINITIONS_DIR: str = "skills/definitions"   # SKILL.md 声明式定义目录
+    SKILL_SELECT_ENABLED: bool = True    # 命中式 Skill 选择 + 渐进式披露;False=整组绑定旧行为
+    SKILL_SELECT_TOP_N: int = 3          # 每次对话最多披露的 Skill 指令数
 
     # ── Agent ──
     PREPROCESS_ENABLED: bool = True

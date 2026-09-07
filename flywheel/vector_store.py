@@ -9,6 +9,7 @@ Both implement the same interface: ``insert``, ``search``, ``delete_by_id``, ``c
 
 import hashlib
 import os
+import zlib
 from functools import lru_cache
 
 import numpy as np
@@ -53,11 +54,16 @@ def _ollama_embed(text: str, dim: int | None = None) -> list[float] | None:
 
 
 def _bigram_embed(text: str, dim: int = _dim()) -> list[float]:
-    """Character-bigram fallback embedding. Normalized L2 vector."""
+    """Character-bigram fallback embedding. Normalized L2 vector.
+
+    Uses zlib.crc32 (stable across processes) instead of built-in hash(),
+    which is salted by PYTHONHASHSEED and yields different vectors after a
+    restart — making persisted Milvus vectors incomparable.
+    """
     bigrams = [text[i:i + 2] for i in range(len(text) - 1)]
     vec = np.zeros(dim, dtype=np.float32)
     for bg in bigrams:
-        idx = hash(bg) % dim
+        idx = zlib.crc32(bg.encode("utf-8")) % dim
         vec[idx] += 1.0
     norm = np.linalg.norm(vec)
     if norm > 0:

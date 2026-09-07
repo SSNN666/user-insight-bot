@@ -234,7 +234,10 @@ def _parse_decision_tree(rules_text: str) -> dict[int, dict[str, tuple[float, fl
             feature = cond_match.group(1)
             op = cond_match.group(2)
             value = float(cond_match.group(3))
-            depth = line.index('|')
+            # sklearn export_text 每行以 '|' 开头,层级 d 的行含 d+1 个 '|'
+            # (根 `|---` 计 1 个 → 深度 0)。index('|') 恒为 0,算不出深度,
+            # 会误把所有祖先条件都清掉。
+            depth = line.count('|') - 1
             # Remove conditions at or beyond this depth
             current_conditions = [c for c in current_conditions if c[3] < depth]
             current_conditions.append((feature, op, value, depth))

@@ -1,7 +1,7 @@
 """Flywheel incremental update scheduler — background asyncio task.
 
 Collects new samples → scores them → ingests into sample library.
-Uses a cursor-based approach (last processed ID) for incremental updates.
+Uses per-source cursors (last processed ID) for incremental updates.
 """
 
 import asyncio
@@ -22,17 +22,22 @@ class FlywheelScheduler:
     def __init__(self):
         self.stop_event = asyncio.Event()
         self._running = False
-        self._last_ingested_id = 0
+        # 各源 ID 空间独立(feedback / watcher_tasks / manual_annotations),
+        # 必须按源分别游标;共用一个会在游标推进后永久漏采小 ID 源的新记录
+        self._cursors: dict[str, int] = {"feedback": 0, "auto_task": 0, "manual": 0}
+        # 后台循环与 /flywheel/trigger 手动触发可能并发,串行化防止重复入库
+        self._lock = asyncio.Lock()
 
     async def start(self) -> None:
         settings = get_settings()
         self._running = True
         self.stop_event.clear()
-        self._last_ingested_id = get_sample_store().get_max_ingested_id()
+        # 从 0 开始(不复用样本库自增 id——它与外部源 id 空间无关),
+        # 重复收集由 collect_all 的 ext_key 去重保证幂等
+        self._cursors = {"feedback": 0, "auto_task": 0, "manual": 0}
 
         logger.info("flywheel_scheduler_started", extra={
             "interval_s": settings.FLYWHEEL_UPDATE_INTERVAL,
-            "last_ingested_id": self._last_ingested_id,
         })
 
         while not self.stop_event.is_set():
@@ -57,21 +62,26 @@ class FlywheelScheduler:
         """Collect, score, and ingest one batch of new samples.
 
         Uses a set-based dedup to handle non-monotonic external IDs safely.
-        The cursor still advances, but we track seen IDs to prevent re-ingestion.
+        The cursors still advance, but we track seen IDs to prevent re-ingestion.
 
         Returns:
             Number of new samples ingested.
         """
+        async with self._lock:
+            # 内部为同步 sqlite + Ollama 嵌入(15s 超时),丢线程池避免阻塞事件循环
+            return await asyncio.to_thread(self._update_once_locked)
+
+    async def _update_once_locked(self) -> int:
         store = get_sample_store()
 
-        # Collect new samples since last cursor
-        new_samples = collect_all(since_id=self._last_ingested_id)
+        # Collect new samples per source since each source's cursor
+        new_samples = collect_all(self._cursors)
         if not new_samples:
             return 0
 
         ingested = 0
-        # Track the highest ID seen this batch to advance the cursor safely
-        max_id_this_batch = self._last_ingested_id
+        # Track the highest ID seen this batch per source to advance cursors
+        max_id_by_source: dict[str, int] = {}
 
         for s in new_samples:
             start = time.monotonic()
@@ -97,20 +107,22 @@ class FlywheelScheduler:
             )
             # Advance cursor safely: only update from valid numeric IDs
             ext_id = s.get("external_id")
-            if isinstance(ext_id, (int, float)) and ext_id is not None:
-                max_id_this_batch = max(max_id_this_batch, ext_id)
+            src = s.get("source", "")
+            if isinstance(ext_id, (int, float)) and ext_id is not None and src in self._cursors:
+                max_id_by_source[src] = max(max_id_by_source.get(src, self._cursors[src]), ext_id)
             ingested += 1
             logger.debug("sample_ingested", extra={
                 "source": s["source"], "score": quality.score,
                 "positive": quality.is_positive, "ms": elapsed_ms,
             })
 
-        # Advance cursor to the max ID seen in this batch
-        self._last_ingested_id = max_id_this_batch
+        # Advance each source cursor to the max ID seen in this batch
+        for src, mx in max_id_by_source.items():
+            self._cursors[src] = max(self._cursors[src], mx)
 
         logger.info("flywheel_batch_done", extra={
             "collected": len(new_samples), "ingested": ingested,
-            "cursor": self._last_ingested_id,
+            "cursors": self._cursors,
         })
         return ingested
 

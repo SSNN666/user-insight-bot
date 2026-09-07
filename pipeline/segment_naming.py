@@ -22,6 +22,7 @@ logger = get_logger(__name__)
 
 _names_cache: dict = {}
 _names_lock = threading.RLock()
+_MAX_NAMES_CACHE_ENTRIES = 200   # 分群微变即产生新键,防缓存只增不删
 
 NAMING_SYSTEM_PROMPT = (
     "你是电商运营专家。根据用户分群统计特征,为每个分群取一个简洁的中文业务名"
@@ -163,6 +164,8 @@ def get_segment_names(seg=None, force: bool = False) -> dict[int, str]:
         logger.warning("segment_naming_llm_failed", extra={"error": str(e)[:150]})
 
     with _names_lock:
+        if len(_names_cache) >= _MAX_NAMES_CACHE_ENTRIES:
+            _names_cache.clear()   # 键空间有限,超限整体清空即可防膨胀
         _names_cache[cache_key] = (dict(names), time.time())
     return names
 

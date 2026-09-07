@@ -36,6 +36,11 @@ plt.rcParams.update(_CHINESE_FONT_RC)
 from config.settings import get_settings as _gs
 API = f"http://{_gs().API_HOST}:{_gs().API_PORT}"
 
+# 演示级鉴权:配置了 DEBUG_API_KEY 时调试台/任务监控等端点要求 X-API-Key 头,
+# 缺省空串(关闭)则不带该头(与 FastAPI ApiKeyMiddleware 行为一致)
+_DEBUG_API_KEY = _gs().DEBUG_API_KEY
+_EXTRA_HEADERS = {"X-API-Key": _DEBUG_API_KEY} if _DEBUG_API_KEY else {}
+
 # Shared HTTP client with connection pool — reused across all Gradio tabs.
 # Closed on process exit via atexit.  Never instantiate another httpx.Client
 # in chart/refresh helpers; use the module-level helpers below.
@@ -46,6 +51,7 @@ _client = httpx.Client(
         max_connections=20,
         keepalive_expiry=30.0,
     ),
+    headers=_EXTRA_HEADERS,
 )
 
 import atexit

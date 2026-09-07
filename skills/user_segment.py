@@ -50,7 +50,7 @@ def _load_and_process(force_refresh: bool = False):
             age = time.time() - _cached_at
             if age < settings.PIPELINE_CACHE_TTL:
                 logger.debug("pipeline_cache_hit", extra={"age_seconds": round(age)})
-                return _cached_rfm, _cached_segments, _cached_rules
+                return _cached_rfm.copy(), _cached_segments.copy(), dict(_cached_rules)
             logger.info("pipeline_cache_expired", extra={"age_seconds": round(age)})
 
         # Double-check: if another thread just finished, reuse its result
@@ -58,7 +58,7 @@ def _load_and_process(force_refresh: bool = False):
             age = time.time() - _cached_at
             if age < 5:  # very fresh → another thread just computed it
                 logger.debug("pipeline_cache_race_avoided")
-                return _cached_rfm, _cached_segments, _cached_rules
+                return _cached_rfm.copy(), _cached_segments.copy(), dict(_cached_rules)
 
     # Slow path — compute (outside lock to allow concurrent reads)
     logger.info("data_pipeline_start")
@@ -100,7 +100,8 @@ def _load_and_process(force_refresh: bool = False):
     logger.info("data_pipeline_complete", extra={
         "users": len(rfm), "k": k_value, "silhouette": round(silhouette, 4),
     })
-    return _cached_rfm, _cached_segments, _cached_rules
+    # 返回副本:缓存是全局共享的,调用方原地修改会污染后续所有读取方
+    return _cached_rfm.copy(), _cached_segments.copy(), dict(_cached_rules)
 
 
 def invalidate_pipeline_cache() -> None:
@@ -380,13 +381,16 @@ class ProductSearchSkill(BaseSkill):
             if keyword:
                 kw = keyword.lower()
                 name_matches = [p for p in matches if kw in p["product_name"].lower()]
+                # Keyword doesn't match any product name — try matching as category too
+                cat_matches = [p for p in matches if kw in p.get("category", "").lower()]
                 if name_matches:
                     matches = name_matches
+                elif cat_matches:
+                    matches = cat_matches
                 else:
-                    # Keyword doesn't match any product name — try matching as category too
-                    cat_matches = [p for p in matches if kw in p.get("category", "").lower()]
-                    if cat_matches:
-                        matches = cat_matches
+                    # 无任何匹配 → 空结果(否则会带着全量商品返回 success,
+                    # LLM 误以为"找到相关商品",从全量列表编推荐 → 幻觉)
+                    matches = []
 
             if not matches:
                 return SkillResult(
@@ -528,30 +532,41 @@ class SegmentTrendSkill(BaseSkill):
 
 
 def register_all_skills() -> None:
-    """Register all built-in skills with the global registry."""
+    """Register all built-in skills with the global registry.
+
+    Skill engineering 主路径:优先从 ``skills/definitions/*/SKILL.md`` 声明式注册
+    (加载器按 frontmatter 覆盖 group/version/tags/description);
+    定义文件缺失时回退到程序化注册(向后兼容,行为等同旧版)。
+    """
     from skills import SkillRegistry
+    from skills.loader import register_from_definitions
 
-    # ── E-commerce / shopping skills ──
-    SkillRegistry.register(ProductSearchSkill())
-    SkillRegistry.register(GetCategoriesSkill())
+    registered = set(register_from_definitions())
 
-    # ── User segment analysis skills ──
-    SkillRegistry.register(UserSegmentStatsSkill())
-    SkillRegistry.register(UserSegmentRulesSkill())
-    SkillRegistry.register(HighValueUsersSkill())
-    SkillRegistry.register(SegmentGrowthSkill())
-    SkillRegistry.register(SegmentTrendSkill())
-    SkillRegistry.register(RefreshPipelineSkill())
+    # ── 兜底:未提供 SKILL.md 的 Skill 仍按旧方式注册 ──
+    fallback_classes = [
+        ProductSearchSkill, GetCategoriesSkill,
+        UserSegmentStatsSkill, UserSegmentRulesSkill,
+        HighValueUsersSkill, SegmentGrowthSkill, SegmentTrendSkill,
+        RefreshPipelineSkill,
+    ]
+    for cls in fallback_classes:
+        if cls.name not in registered:
+            SkillRegistry.register(cls())
 
     # ── 转化漏斗(行为流 → 浏览/加购/下单 逐级转化率)──
     from skills.funnel import FunnelAnalysisSkill
-    SkillRegistry.register(FunnelAnalysisSkill())
+    if FunnelAnalysisSkill.name not in registered:
+        SkillRegistry.register(FunnelAnalysisSkill())
 
-    # ── VL 扩展:商品图像解析(不进 Agent 工具绑定名单,由上传接口直接调用)──
+    # ── VL 扩展:商品图像解析(group=vision,不进 Agent 工具绑定名单)──
     from skills.product_image import ProductImageSkill
-    SkillRegistry.register(ProductImageSkill())
+    if ProductImageSkill.name not in registered:
+        SkillRegistry.register(ProductImageSkill())
 
     # ── 个性化推荐(画像驱动,进入分析模式工具集)──
     from skills.recommend import PersonalRecommendationSkill
-    SkillRegistry.register(PersonalRecommendationSkill())
-    logger.info("all_skills_registered")
+    if PersonalRecommendationSkill.name not in registered:
+        SkillRegistry.register(PersonalRecommendationSkill())
+    logger.info("all_skills_registered",
+                extra={"from_definitions": len(registered)})

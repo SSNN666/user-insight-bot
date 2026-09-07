@@ -29,7 +29,7 @@ async def list_tasks(
     result = tasks[:limit]
     return {
         "tasks": [t.to_dict() for t in result],
-        "total": len(result),
+        "total": tm.count_tasks(status=status),
         "limit": limit,
         "offset": offset,
     }

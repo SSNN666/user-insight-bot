@@ -2,6 +2,8 @@
 
 全部离线,不下载真实数据集(用合成 CSV 模拟 JData 表结构,含官方浮点 ID 口径)。
 """
+import datetime
+
 import pandas as pd
 import pytest
 
@@ -197,11 +199,14 @@ class TestMergeStoreOrders:
     def test_store_orders_merged_into_jdata(self, tmp_path, monkeypatch):
         """JData 用户(101.0→101)在商城的运行时订单并入 CSV 订单。"""
         self._setup(tmp_path, monkeypatch)
+        # 运行时订单用"当前时间"(真实 created_at,不参与 JData 时间线平移)。
+        # 注意:不能硬编码日期 —— JData 按"今天-1"平移,硬编码会被时间追平。
+        created_at = datetime.datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
         store_orders = [{
             "order_id": 20000, "user_id": 101, "product_id": 9001,
             "product_name": "SKU-9001", "quantity": 2,
             "total_amount": 500.0, "status": "已确认",
-            "created_at": "2026-08-18T10:00:00",
+            "created_at": created_at,
         }]
         monkeypatch.setattr("api.data_store._orders", store_orders)
         monkeypatch.setattr("api.data_store._products_by_id", {
@@ -217,7 +222,7 @@ class TestMergeStoreOrders:
         assert row["total_amount"] == 500.0
         # 时序口径:JData 已平移到当前时间线(最新=今天-1),运行时订单用真实
         # created_at(今天)自然衔接 → 下单用户 recency=1,dormant 复活
-        assert pd.to_datetime(row["order_date"]) == pd.Timestamp("2026-08-18T10:00:00")
+        assert pd.to_datetime(row["order_date"]) == pd.to_datetime(created_at)
         # 合并订单是数据线最新一单(JData 平移后截至昨天,今天下单即最新)
         assert pd.to_datetime(row["order_date"]) >= df["order_date"].max()
 

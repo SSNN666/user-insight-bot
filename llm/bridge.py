@@ -231,8 +231,13 @@ def get_fallback_llm(
     chain = _get_chain(role)
     llm = FallbackChatModel(chain=chain)
     if tool_names is not None:
-        from tools import tools
-        scoped = [t for t in tools if t.name in tool_names]
+        # tools 模块导入副作用:确保 Skill 一次性注册(向后兼容);
+        # 工具列表实时从注册表拉取(热加载新增的 Skill 即时进入 LLM 工具集,
+        # 不再依赖 import 时的静态快照)
+        from tools import tools as _registration_trigger  # noqa: F401
+        from skills import SkillRegistry
+        scoped = [t for t in SkillRegistry.get_langchain_tools()
+                  if t.name in tool_names]
         return llm.bind_tools(scoped)
     return llm
 
