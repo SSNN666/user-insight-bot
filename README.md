@@ -28,13 +28,17 @@ flowchart TB
         FC -->|pass| Done["END"]
     end
 
-    subgraph Skills["Skills (7 tools)"]
+    subgraph Skills["Skills (11 tools)"]
         Search["search_products"]
         Cats["get_categories"]
         Stats["get_user_segment_stats"]
         Rules["get_segment_rules"]
         HighVal["get_high_value_users"]
         Growth["get_segment_growth"]
+        Trend["get_segment_trend"]
+        Funnel["get_funnel_analysis"]
+        Recommend["get_personal_recommendations"]
+        Image["analyze_product_image"]
         Refresh["refresh_pipeline"]
     end
 
@@ -61,7 +65,7 @@ flowchart TB
     subgraph Eval["评测体系"]
         HR["Hit Rate / MRR"]
         Ragas["RAGAS LLM-Judge"]
-        Unit["66单元测试"]
+        Unit["297项测试"]
     end
 
     Vue -->|"HTTP"| Router
@@ -118,7 +122,7 @@ cd frontend && npm install && npm run dev   # 5. Vue → :5173
 
 ### 1. Agentic RAG — 工具自动调用 + 物理隔离
 
-7 个可插拔 Skill，按场景物理隔离：购物模式只暴露 2 个商品工具，分析模式只暴露 5 个分群工具。
+11 个可插拔 Skill（商品域 3 + 分析域 7 + 图像解析 1），按场景物理隔离：购物模式只暴露商品工具，分析模式只暴露分群工具。
 
 ### 2. 三层纯规则 FactCheck
 
@@ -171,13 +175,44 @@ JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自�
 (品类匹配/标签命中/价格适配消费力);推荐与搜索结果以结构化商品列表透出,
 前端渲染**商品卡片 + 一键加购**,AI 导购从文字变交互。
 
-### 12. 运营友好型分析体验
+### 12. Skill 工程化(SKILL.md 声明式 + 运行时发现 + 渐进式披露)
+
+**Skill 是文件系统一等公民**:每个 Skill 一个目录,``skills/definitions/<name>/SKILL.md``
+(YAML frontmatter + Markdown 指令),加载器启动时解析校验并注册 —— **加新 Skill 不碰代码**,
+丢一个文件夹即可,定义层改动按 mtime 热加载即时生效。
+**两种 Skill**:``tool`` 型(绑 Python 实现,进 LLM 工具集)/ ``instruction`` 型
+(纯指令,命中时指导工具编排 —— Skill ≠ Tool 的机制证据)。
+**两层发现**:确定性场景路由(购物/分析分组物理隔离,绑定名单由注册表元数据推导,
+SKILL_ENABLED 开关真实生效)+ 组内描述检索打分(tags + description 重叠),
+命中的 Skill 指令才注入上下文(**渐进式披露**,长指令不常驻 token)。
+**可评测**:``uv run python -m eval.skill_eval`` 零 LLM 对每个 Skill 跑代表性探针,
+输出状态/置信度/耗时报表。
+
+### 13. 运营友好型分析体验
 
 **分群业务命名**(LLM 按分群特征命名 + 确定性启发式兜底,缓存复用):对话、图表、
 运营建议、环比对比全链路说人话("高价值核心用户"而非"分群2");
 **对话内直接出图**:分析类 Skill 的结构化数据透出为 chart 协议,前端零依赖 SVG 渲染;
 **环比对比 Skill**:`get_segment_growth` 支持指定月份("2月 vs 3月"),无快照时诚实提示可用月份;
 **数据新鲜度标注**:图表注明数据时间/数据源/采样口径。
+
+### 14. 模拟实时数据:滚动揭晓(假数据也能"活起来")
+
+JData 整体平移是"刚体":每次重算分群结果不变 → 快照对比无差异 → Watcher 检测
+在模拟数据上永远静默。**滚动揭晓**让数据面按墙钟日逐日生长:第 1 天露出原始窗口
+最后 PREHEAT 天,之后每天 +1,直到全窗口进入稳态 —— 窗口增长 → 数据指纹变化 →
+force_refresh → 新快照 → 事件检测真实触发(漏斗独立读 CSV 也同口径截断)。
+进度落盘 `cache_data/tianchi_reveal.json`,进程重启续播;默认关闭 = 既有行为。
+
+```env
+DATA_SOURCE=tianchi
+TIANCHI_REVEAL_ENABLED=true     # 默认 false(保持测试确定性)
+TIANCHI_REVEAL_PREHEAT_DAYS=30  # 第 1 天露出的天数(建议 ≥7)
+TIANCHI_REVEAL_STEP=1           # 每墙钟日新增天数(>1 加速演示)
+```
+
+演示不想等真的一天:`GET /debug/reveal-status` 看进度,
+`POST /debug/reveal-advance {"days":1}` 手动推进后立即触发分析。
 
 ---
 
@@ -188,7 +223,7 @@ JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自�
 | AI | `POST /ask` | Agent 问答 |
 | 电商 | `/api/products`, `/api/cart`, `/api/orders` | Vue 商城后端 |
 | 推荐 | `GET /api/recommendations`, `POST /api/product-image/analyze` | 画像推荐 / 商品图像解析(VL) |
-| 调试 | `/debug/*` | CRUD + 事件触发(已移除一键重置:避免清空运行时订单) |
+| 调试 | `/debug/*` | CRUD + 事件触发 + 滚动揭晓状态/推进(已移除一键重置:避免清空运行时订单) |
 | 统计 | `/stats/rfm`, `/stats/segment-ratio`, `/stats/flow`, `/stats/segment-trend` | 图表数据(含分群时间趋势) |
 | Trace | `GET /traces`, `GET /traces/{id}` | Agent 执行链路 |
 | 任务 | `GET /tasks/` | 自主分析任务管理 |
@@ -204,7 +239,7 @@ JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自�
 ├── agent/          # Agent 核心（StateGraph + Tracer + FactCheck + Orchestrator）
 ├── api/            # FastAPI（路由 + 中间件 + 电商 + 数据存储）
 ├── pipeline/       # 数据流水线（加载 → 清洗 → RFM → 聚类 → 画像）
-├── skills/         # 可插拔 Skill 框架（7 个工具）
+├── skills/         # 可插拔 Skill 框架（11 工具 + 1 纯指令，SKILL.md 声明式定义 + 加载器 + 选择器）
 ├── watcher/        # 事件检测 + CDC + 任务管理
 ├── flywheel/       # 数据飞轮（采集 → 评分 → BM25+Milvus 检索）
 ├── eval/           # 自动化评测（25 QA + 10 Event + LLM-Judge）
@@ -212,7 +247,7 @@ JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自�
 ├── common/         # 公共工具（json_repair / guardrails / content_moderation）
 ├── config/         # Pydantic-settings 配置中心
 ├── log/            # JSON 结构化日志
-├── tests/          # 122 项测试(纯函数 + Agent 图 + API 集成 + 会话持久化)
+├── tests/          # 297 项测试(283 pytest + 14 vitest:纯函数 + Agent 图 + API 集成 + 前端)
 ├── docs/           # 数据合规说明（DATA_COMPLIANCE.md）
 ├── frontend/       # Vue 3 电商商城
 ├── app.py          # Gradio 管理台（5 Tab）

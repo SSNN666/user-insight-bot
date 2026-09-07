@@ -148,6 +148,24 @@ MySQL :3306 → 连不上？
 无价格字段按 (品类,品牌) 确定性合成——RFM/聚类/Agent 全链路零改动,
 简化的口径如实记录在 [DATA_COMPLIANCE.md](docs/DATA_COMPLIANCE.md)。
 
+### 7. 模拟数据实时化:滚动揭晓(假数据也能"活起来")
+
+**问题**:JData 整体平移后是"刚体"——每次重算分群结果一模一样,快照对比无
+差异,Watcher 自主分析在模拟数据上永远静默,演示只能靠手动触发。
+
+**方案**:数据面按墙钟日**逐日生长**:第 1 天露出原始窗口最后 30 天(预热),
+之后每天 +1,直到全窗口稳态。窗口增长 → 数据指纹变化 → force_refresh →
+新快照 → 事件检测真实触发。三处关键设计:
+- **状态机幂等**:进度落盘 `cache_data/tianchi_reveal.json`(RLock + 原子写),
+  watcher 与 loader 两处调用不重复推进,重启续播;
+- **口径统一**:漏斗独立读 CSV,同口径截断;截断在"原始时间线、平移之前",
+  RFM 基准日(最新+1)语义不变;
+- **指纹只含窗口数不含日期**——稳态后不每天白触发一次全量重算。
+
+**面试说法**:"模拟数据的'实时感'不能靠平移,平移是刚体运动——要让 Watcher
+真正检测到变化,数据必须逐日'长'出来。状态机每天 +1 天窗口,指纹驱动重算,
+演示时 /debug/reveal-advance 可手动推进,不用等真的一天。"
+
 ---
 
 ## 项目演进（7 文件 → 65 文件，12 个 Phase）
@@ -176,14 +194,14 @@ MySQL :3306 → 连不上？
 agent/       10 files  Agent核心（图 + 核查 + 编排 + Trace + Memory）
 api/          8 files  FastAPI（路由 + 中间件 + 电商 + 数据存储）
 pipeline/     4 files  数据流水线（加载 → 清洗 → RFM → 聚类 → 画像）
-skills/       3 files  可插拔 Skill（7个工具，2购物 + 5分析）
+skills/       3 files  可插拔 Skill（11 个工具，商品 3 + 分析 7 + 图像解析 1）
 watcher/      6 files  事件检测 + CDC + 任务管理
 flywheel/     7 files  飞轮（采集 → 评分 → BM25+Milvus检索 → 调度）
 eval/         6 files  评测（LLM-Judge + Hit/MRR + 检索评测）
 llm/          2 files  LLM客户端（连接池 + 重试 + Token统计）
 config/       2 files  Pydantic-settings（50+配置项）
 log/          2 files  JSON结构化日志
-tests/        5 files  66单元测试（fact_checker 24 + data_store 25 + events 17）
+tests/        23 files  297 项测试（283 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
 frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 ```
 
@@ -212,7 +230,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 > "不用 astream_events——因为 tools 节点是直接执行 Skill 而不是走 ToolNode,不会产生 on_tool_start 事件。用 graph.astream 的三种 stream mode 组合:custom 模式由节点内 get_stream_writer 发 node_start/tool_call/tool_result 事件,updates 模式取节点结果和事实核查结论,messages 模式拿 decide 节点的 token 级 delta。前端用原生 fetch 手写 SSE 帧解析、渲染步骤条,token 打完再用 answer 事件做权威全文覆盖——因为 respond 节点可能修正 Markdown、fact_check 会追加警告。"
 
 ### Q: 测试怎么设计的？
-> "分层设计,111 个用例全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
+> "分层设计,297 个用例(后端 283 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
 
 ### Q: 怎么部署？
 > "docker compose up -d 一键启动全部 4 个服务。Ollama 拆了独立的 GPU profile——纯 CPU 环境用 OpenAI 兼容 API 也能跑。前端用 Nginx 做反向代理，/api/* 自动转发。GitHub Actions 在每次 push 自动跑测试和导入校验。"
@@ -238,12 +256,12 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → HIGH 事件自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析,三段结果落库可查;分群历史快照画成时间趋势图
 5. 数据飞轮——用户反馈 + 自动评分 → 高质量样本入库 → 向量索引 → 反哺 Agent 系统提示
 6. 会话记忆持久化(JSON checkpointer,重启不丢)+ 长对话自动摘要;个性化推荐闭环(图像标签→画像→打分推荐→一键加购)
-7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 122 个测试
+7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 297 个测试（283 pytest + 14 vitest）
 
 **Result**：
 - 三层核查下事实准确率接近 100%
 - 混合检索 Hit@1=70%、MRR=0.75
-- 7 个可插拔 Skill，购物/分析双场景工具物理隔离
+- 11 个可插拔 Skill（分析 7 + 商品 3 + 图像解析 1），购物/分析双场景工具物理隔离
 - 流式 SSE + Agent Trace 可观测性面板
 - 完整电商链路（商品浏览→购物车→下单→支付）+ AI 导购
 
@@ -257,7 +275,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 - [ ] 飞轮正循环的闭环逻辑
 - [ ] Agent 工具物理隔离的做法
 - [ ] 数据源三级降级策略
-- [ ] 7 个 Skill 分别是什么、分属哪个场景
+- [ ] 11 个 Skill 分别是什么、分属哪个场景（分析 7：统计/规则/高价值/环比/趋势/漏斗/刷新；商品 3：搜索/品类/推荐；图像解析 1 由接口直调）
 - [ ] 自动选 K:Gap statistic + 1-SE 简约规则 + 最小簇约束(为什么不用肘部+轮廓的组合分)
 - [ ] 分群业务命名:LLM 生成 + 启发式兜底 + 缓存,全链路(对话/图表/建议/环比)说人话
 - [ ] 对话内出图:Skill 数据 → chart 协议 → 前端零依赖 SVG 渲染
@@ -268,7 +286,9 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 - [ ] SSE 三 stream mode 组合 + 事件 schema(meta/node_start/tool_call/delta/answer/done)
 - [ ] 注入检测 + 内容审核 fail-open 的取舍
 - [ ] Trace 节点耗时是实测的(不是估算)
-- [ ] 122 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成)能讲
+- [ ] 297 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成 + 前端 14 vitest)能讲
+- [ ] Skill 工程化:SKILL.md 声明式(YAML frontmatter + Markdown 指令)、加 Skill 不碰代码、tool vs instruction 两类(Skill≠Tool)、两层发现(注册表推导场景绑定 + 描述检索打分)、渐进式披露(600/2400 上限)、SKILL_ENABLED 真实生效
+- [ ] 滚动揭晓:刚体平移 vs 逐日生长、预热/STEP/稳态、按墙钟日幂等、指纹只含窗口数、funnel 独立读 CSV 同口径截断、/debug/reveal-status 与 reveal-advance
 - [ ] HIGH 事件三阶段流水线的触发与结果落库
 - [ ] 分群时间趋势图的数据来源(快照历史)
 - [ ] 会话持久化的实现(JSON checkpointer 的 serde 桥接)与重启恢复演示
