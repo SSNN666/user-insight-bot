@@ -27,8 +27,13 @@
 
 ## 🖼️ 产品演示画面
 
-> 截图拍摄清单见 [docs/SCREENS.md](docs/SCREENS.md)(开服务后 5 分钟拍完,丢进 docs/screenshots/ 即自动展示)。
-> 就绪后此处展示:商城 AI 导购实时步骤条 / Gradio 分析台 / 对话内出图与分群趋势。
+| | |
+|---|---|
+| **AI 导购实时步骤条** —— 每次提问,意图识别 → 模型决策 → 工具调用 → 数据校验 → 事实核查以 SSE 逐步渲染 | ![AI 导购实时步骤条](docs/screenshots/chat-steps.png) |
+| **Gradio 运营分析台** —— 对话内出图 + 👍/👎 反馈 + Trace 链路 | ![Gradio 运营分析台](docs/screenshots/gradio-console.png) |
+| **分群人数时间趋势** —— Watcher 快照历史绘成的趋势图(自主监测可回溯) | ![分群人数时间趋势](docs/screenshots/segment-trend.png) |
+
+> 重拍/补拍清单见 [docs/SCREENS.md](docs/SCREENS.md)。
 
 ```mermaid
 flowchart TB

@@ -1,8 +1,8 @@
 # 产品截图拍摄清单(README 展示用)
 
-> 目标:3 张图讲完"这是能跑的产品"。每张 1200px 宽、PNG/JPG ≤ 300KB,
-> 存到 `docs/screenshots/`,文件名按下面命名,README 的「产品演示画面」段
-> 就绪后改为 `![说明](docs/screenshots/xxx.png)` 即可。
+> ✅ 已完成(2026-09-08):三张图已拍好并接入 README「产品演示画面」。
+> 如需重拍:每张 1200px 宽、PNG/JPG ≤ 300KB,存 `docs/screenshots/`
+> 并保持下面文件名(README 引用不变)。
 
 ## 开服务
 
