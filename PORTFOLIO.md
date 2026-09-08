@@ -198,6 +198,26 @@ MySQL :3306 → 连不上？
 compose 一键起真 Milvus。剩下没做的(分布式锁、线上效果信号)我明说没做,
 不在文档里假装。"
 
+### 9. LLM 成本与运行观测(LLM 应用上线第一问:花多少钱)
+
+**问题**:LLM 应用进生产,老板/面试官第一问是"每次回答花多少钱、稳不稳",
+而多数 demo 连 token 都不记。
+
+**方案**:复用适配器已有的 usage 回调(UsageInfo 自带 model/provider/latency),
+**零侵入共享 adapter**——康养项目复制版不受影响:
+- `llm/metrics.py`:单价表(provider,model → 元/百万 token,参考价标注日期,
+  ollama 免费)+ SQLite 双表 + 聚合;采集点在 agent sync/stream 两路收口,
+  数据降级链选层(MySQL/cache/tianchi/mock)同步记录;
+- API `/metrics/usage`(总量/按天/按模型/按角色/降级率/延迟)与 `/metrics/tiers`;
+- Gradio「💰 LLM 成本」Tab 可视化。实测:一次 /ask ≈ 8,976 token / ¥0.021,
+  分层调度(decide 走 max、preprocess/reflect 走 flash)的成本差异在数据里
+  直接可见——成本面板成了调度策略的"活证据"。
+
+**面试说法**:"成本是估算模型不是精确账单,单价表配置化、标注调价日期——
+我知道近似在哪。采集层复用适配器 usage 回调,没碰共享源码;降级率、
+数据层选择这些'稳不稳'的信号和钱放一个面板,回答'上线最关心什么'时
+有数据可指。"
+
 ---
 
 ## 项目演进（7 文件 → 65 文件，12 个 Phase）
@@ -309,6 +329,7 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 - [ ] 会话双轨:json 默认/postgres 官方 saver/启动 fail-fast/Windows Selector 事件循环/PG 实测重启恢复
 - [ ] 向量后端可插拔:FLYWHEEL_VECTOR_BACKEND 三值、docker-compose.milvus.yml、回退内存
 - [ ] 评分校准结论:正 0.50-0.85/负 0.0-0.25 空带分离、0.5 无需调权、校准周期 ~200 条
+- [ ] 成本观测:单价表估算语义、零侵入 adapter(共享源码不碰)、/metrics 端点、实测 ¥0.021/问
 - [ ] BM25 + Milvus + RRF + LLM 重排的四阶段检索能讲
 - [ ] 飞轮正循环的闭环逻辑
 - [ ] Agent 工具物理隔离的做法

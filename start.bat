@@ -17,9 +17,9 @@ findstr /C:"SESSION_STORE=postgres" .env >nul 2>&1 && set "NEED_DOCKER=1"
 findstr /C:"FLYWHEEL_VECTOR_BACKEND=milvus-remote" .env >nul 2>&1 && set "NEED_DOCKER=1"
 
 if not defined NEED_DOCKER (
-    echo [0/3] Docker infra skipped (lightweight storage mode).
+    echo [0/3] Docker infra skipped - lightweight storage mode.
 ) else (
-    echo [0/3] Docker infra (Postgres + Milvus) ...
+    echo [0/3] Docker infra - Postgres + Milvus
     call :ensure_docker_engine
     call :start_pg
     call :start_milvus
