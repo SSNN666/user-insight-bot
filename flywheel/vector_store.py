@@ -474,22 +474,42 @@ class RemoteMilvusVectorStore(_VectorStoreBase):
             self._fallback = InMemoryVectorStore()
 
     def _ensure_collection(self) -> None:
+        """集合存在性 + 索引 + load 三段保证(standalone 与 lite 差异集中点):
+        - 独立 Milvus 必须显式建索引(FLAT/COSINE)才能 load(code=700);
+        - 必须显式 load 才能 search/query(code=101);
+        幂等:已存在/已加载不重复建。
+        """
         name = _MILVUS_COLLECTION_NAME
-        if name in (self._client.list_collections() or []):
-            return
-        from pymilvus import CollectionSchema, DataType, FieldSchema
-        schema = CollectionSchema(
-            fields=[
-                FieldSchema(name="id", dtype=DataType.INT64,
-                            is_primary=True, auto_id=False),
-                FieldSchema(name="question", dtype=DataType.VARCHAR, max_length=512),
-                FieldSchema(name="reply", dtype=DataType.VARCHAR, max_length=1024),
-                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=_dim()),
-            ],
-            enable_dynamic_field=False,
-        )
-        self._client.create_collection(name, schema=schema)
-        logger.info("milvus_remote_collection_created", extra={"collection": name})
+        if name not in (self._client.list_collections() or []):
+            from pymilvus import CollectionSchema, DataType, FieldSchema
+            schema = CollectionSchema(
+                fields=[
+                    FieldSchema(name="id", dtype=DataType.INT64,
+                                is_primary=True, auto_id=False),
+                    FieldSchema(name="question", dtype=DataType.VARCHAR, max_length=512),
+                    FieldSchema(name="reply", dtype=DataType.VARCHAR, max_length=1024),
+                    FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=_dim()),
+                ],
+                enable_dynamic_field=False,
+            )
+            self._client.create_collection(name, schema=schema)
+            logger.info("milvus_remote_collection_created", extra={"collection": name})
+
+        # 建索引(FLAT 暴力扫,无 IVF 参数负担)+ load。
+        # pymilvus 3.x 强制 IndexParams 类型(dict/list 形态会被 ParamError 拒),
+        # 重复建同名索引报 "already exist" 属幂等正常 → 吞掉,其余异常上抛走回退
+        try:
+            from pymilvus.milvus_client.index import IndexParams
+            params = IndexParams()
+            params.add_index(
+                field_name="embedding", index_type="FLAT",
+                metric_type="COSINE", index_name="embedding_idx",
+            )
+            self._client.create_index(name, params)
+        except Exception as exc:
+            if "already exist" not in str(exc).lower():
+                raise
+        self._client.load_collection(name)
 
     def insert(self, sample_id: int, question: str, reply: str) -> None:
         if self._fallback is not None:
@@ -524,6 +544,10 @@ class RemoteMilvusVectorStore(_VectorStoreBase):
                 limit=top_k,
                 output_fields=["id", "question", "reply"],
                 search_params={"metric_type": "COSINE", "params": {}},
+                # 独立 Milvus 默认 Bounded 一致性 → 写入后立即可见性不如 lite;
+                # 本项目"写完即查"(测试/飞轮入库后马上检索),用 Strong 强一致
+                # (数据量小代价可忽略;大批量场景应改批量 flush + 放宽一致性)
+                consistency_level="Strong",
             )
             hits = (res or [[]])[0]
             return [{
@@ -538,12 +562,20 @@ class RemoteMilvusVectorStore(_VectorStoreBase):
             })
             return []
 
+    def _flush(self) -> None:
+        """flush 落盘:独立 Milvus 的 stats/delete 只对已 flush 数据生效。"""
+        try:
+            self._client.flush(_MILVUS_COLLECTION_NAME)
+        except Exception as exc:
+            logger.debug("milvus_remote_flush_error", extra={"error": str(exc)[:100]})
+
     def delete_by_id(self, sample_id: int) -> None:
         if self._fallback is not None:
             return self._fallback.delete_by_id(sample_id)
         try:
             self._client.delete(
                 _MILVUS_COLLECTION_NAME, filter=f"id == {sample_id}")
+            self._flush()  # 删除对 sealed 段生效需要落盘
         except Exception:
             pass  # 行不存在属正常
 
@@ -551,8 +583,19 @@ class RemoteMilvusVectorStore(_VectorStoreBase):
         if self._fallback is not None:
             return self._fallback.count()
         try:
-            stats = self._client.get_collection_stats(_MILVUS_COLLECTION_NAME)
-            return int((stats or {}).get("row_count", 0))
+            self._flush()
+            # 不用 get_collection_stats 的 row_count:它含删除墓碑行(compaction
+            # 前不物理消失)。count(*) 聚合走查询语义,反映真实活数。
+            res = self._client.query(
+                _MILVUS_COLLECTION_NAME, output_fields=["count(*)"],
+                consistency_level="Strong",
+            )
+            raw = res[0] if isinstance(res, (list, tuple)) and res else {}
+            if hasattr(raw, "get"):
+                return int(raw.get("count(*)") or 0)
+            # pymilvus 3.x 聚合返回形态偶有包裹 → 字符串兜底解析
+            return int(str(raw).split("count(*)':", 1)[-1].split("}")[0]
+                       .strip(" '")) if raw else 0
         except Exception:
             return 0
 

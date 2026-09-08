@@ -63,6 +63,16 @@ class FakeMilvusClient:
         self.calls.append("get_collection_stats")
         return {"row_count": len(self.rows)}
 
+    def query(self, name, output_fields=None, filter="", consistency_level=None, **kw):
+        self.calls.append("query")
+        return [{"count(*)": len(self.rows)}]
+
+    def create_index(self, name, params=None, **kw):
+        self.calls.append("create_index")
+
+    def load_collection(self, name, **kw):
+        self.calls.append("load_collection")
+
     def close(self):
         self.calls.append("close")
 

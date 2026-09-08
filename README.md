@@ -151,7 +151,10 @@ Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷
 用户反馈 + 自动评分 → 向量入库 → 检索反哺 Agent 系统提示 → 回答质量越用越好。
 **向量后端可插拔**：默认 Milvus-lite（零依赖文件库）;`FLYWHEEL_VECTOR_BACKEND=milvus-remote`
 切独立 Milvus（pymilvus gRPC,生产级;`docker-compose.milvus.yml` 一键起 etcd/MinIO/Milvus
-三件套,国内拉镜像加 `IMAGE_PREFIX=docker.m.daocloud.io/`）;两者挂掉都自动回退内存,接口不变。
+三件套）。国内拉镜像:compose 支持 `IMAGE_PREFIX` 变量,不同镜像的可用源不同——
+实测 etcd 走 `quay.m.daocloud.io/`、milvusdb/milvus 与 minio 走 `hub.rat.dev/`
+或 `docker.1ms.run/`(大镜像多源层缓存可合流续拉);直连能通时无需前缀。
+两种后端挂掉都自动回退内存,接口不变。
 评分阈值经真实样本校准（[docs/SCORER_CALIBRATION.md](docs/SCORER_CALIBRATION.md)）:
 89 条运行样本中正样本 0.50-0.85、负样本 0.0-0.25,0.26-0.49 为空带 → 0.5 阈值实证分离,无需调权。
 
