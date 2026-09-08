@@ -2,7 +2,20 @@
 
 > AI-Native E-commerce User Profiling & Autonomous Analytics Platform
 
+[![CI](https://github.com/SSNN666/user-insight-bot/actions/workflows/test.yml/badge.svg)](https://github.com/SSNN666/user-insight-bot/actions/workflows/test.yml)
+[![tests: 322 passed](https://img.shields.io/badge/tests-322%20passed-brightgreen)]()
+[![LangGraph](https://img.shields.io/badge/LangGraph-1.2-blue)]()
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.139-blue)]()
+[![Vue 3](https://img.shields.io/badge/Vue%203-3.5-42b883)]()
+
+> 📋 面试叙事/设计决策速查见 [PORTFOLIO.md](PORTFOLIO.md)；数据合规口径见 [docs/DATA_COMPLIANCE.md](docs/DATA_COMPLIANCE.md)。
+
 基于 **LangGraph 多智能体 + RAG + 事件驱动** 的电商用户画像平台。Agent 自主调用工具获取分群数据，三层事实核查保障数据准确性，后台引擎自动检测业务异常并触发分析。
+
+## 🖼️ 产品演示画面
+
+> 截图拍摄清单见 [docs/SCREENS.md](docs/SCREENS.md)(开服务后 5 分钟拍完,丢进 docs/screenshots/ 即自动展示)。
+> 就绪后此处展示:商城 AI 导购实时步骤条 / Gradio 分析台 / 对话内出图与分群趋势。
 
 ```mermaid
 flowchart TB
@@ -232,6 +245,20 @@ TIANCHI_REVEAL_STEP=1           # 每墙钟日新增天数(>1 加速演示)
 `POST /debug/reveal-advance {"days":1}` 手动推进后立即触发分析。
 
 ---
+
+## 📊 评测数据
+
+检索链路(飞轮范文混合检索:BM25 + 语义双路 → RRF → LLM 精排)在 10 条业务问题上评测:
+
+| 指标 | 数值 |
+|------|------|
+| Hit@1 / Hit@3 / Hit@5 | **0.70 / 0.80 / 0.80** |
+| MRR(平均倒数排名) | **0.75** |
+
+- 完整逐问明细: `eval/results/latest_report.json`(2026-07 基线)
+- 重跑:`uv run python -m eval.retrieval_eval`(本地 Ollama embedding 或云端适配器)
+- 代码质量:**322 项测试**(308 pytest + 14 vitest,纯函数 / Agent 图剧本化 / API 集成 / 前端,全部离线秒级)+ CI 每 push 自动执行
+- 飞轮评分阈值经 89 条真实样本校准:正样本 0.50-0.85 / 负样本 0.0-0.25,0.5 阈值空带分离,详见 [docs/SCORER_CALIBRATION.md](docs/SCORER_CALIBRATION.md)
 
 ## API 概览
 
