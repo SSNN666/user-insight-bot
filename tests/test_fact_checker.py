@@ -280,3 +280,75 @@ class TestRunFactCheck:
         result = run_fact_check(reply, [STATS], "strict")
         correction = result.format_corrections_for_llm()
         assert "999" in correction or "50" in correction
+
+
+# ══════════════════════════════════════════════════════════════════
+# 换说法对抗样本(Phase: 覆盖边界收敛)
+# 旧版只认"分群X有N人/表格行",这组验证换说法漏检收敛:
+# 占比/总数(含千分位)/倍数/差额,以及"消费倍数不误报人数"判别。
+# ══════════════════════════════════════════════════════════════════
+
+class TestAdversarialPhrasings:
+    """同一事实换四种说法都要检出;正确说法零误报。"""
+
+    def test_pct_share_wrong_detected(self):
+        v = _fact_check_numerical("分群2 占比 55%", [STATS])
+        assert any(x.field == '用户占比' and x.claimed_value == 55.0 for x in v)
+
+    def test_pct_share_correct_passes(self):
+        v = _fact_check_numerical("分群0 占比 28%", [STATS])          # 27.8 四舍五入
+        v2 = _fact_check_numerical("分群2 占比 16.7%", [STATS])       # 16.67 同精度
+        assert not v and not v2
+
+    def test_total_count_wrong_detected(self):
+        v = _fact_check_numerical("全平台共 300 名用户", [STATS])
+        assert any(x.field == '用户总数' and x.actual_value == 180 for x in v)
+
+    def test_total_count_correct_passes(self):
+        assert not _fact_check_numerical("全平台共 180 名用户", [STATS])
+
+    def test_thousands_separator_count(self):
+        """千分位数字也要能核(共 1,800 类长文数字)。"""
+        v = _fact_check_numerical("全平台共 1,800 名用户", [STATS])
+        assert any(x.field == '用户总数' for x in v)
+
+    def test_multiple_wrong_detected(self):
+        v = _fact_check_numerical("分群0 是分群2 的 5 倍", [STATS])   # 实际 1.67
+        assert any(x.field == '用户数倍数' for x in v)
+
+    def test_multiple_correct_rounded_passes(self):
+        # 50/30=1.667 → "1.7 倍" 是四舍五入,不误报
+        assert not _fact_check_numerical("分群0 是分群2 的 1.7 倍", [STATS])
+
+    def test_multiple_metric_not_people_no_false_positive(self):
+        """"分群0 的消费是分群2 的 2 倍" —— 说的是金额不是人数,跳过。"""
+        assert not _fact_check_numerical("分群0 的消费是分群2 的 2 倍左右", [STATS])
+
+    def test_diff_wrong_direction_detected(self):
+        v = _fact_check_numerical("分群0 比 分群2 少 20 人", [STATS])  # 实为多 20
+        assert any(x.field == '用户数差额' for x in v)
+
+    def test_diff_wrong_magnitude_detected(self):
+        v = _fact_check_numerical("分群1 比 分群0 多 10 人", [STATS])  # 实际差 50
+        assert any(x.field == '用户数差额' and x.actual_value == 50 for x in v)
+
+    def test_diff_correct_passes_no_double_flag(self):
+        """正确差额零误报,且不得与旧"分群Y有N人"句式重复双报。"""
+        assert not _fact_check_numerical("分群0 比 分群2 多 20 人", [STATS])
+
+    def test_direct_count_still_works_after_masking(self):
+        """掩码逻辑不影响普通直接陈述句。"""
+        assert not _fact_check_numerical("分群0 有 50 人", [STATS])
+        v = _fact_check_numerical("分群0 有 60 人", [STATS])
+        assert any(x.field == '用户数' for x in v)
+
+    def test_mixed_prose_multiple_claims(self):
+        """长散文多句式混合:漏一处抓一处,不整体误报。"""
+        prose = ("高价值核心用户集中在分群1(占比约 55%),他们贡献了主要消费;"
+                 "分群0 流失风险最高,全平台共 180 名用户中他们占 28%。")
+        v = _fact_check_numerical(prose, [STATS])  # 分群1 实际占比 55.6%
+        assert not v
+        prose_bad = ("高价值核心用户集中在分群1,他们占比约 80%,"
+                     "分群0 比 分群2 多 20 人,是平台主力。")
+        v2 = _fact_check_numerical(prose_bad, [STATS])
+        assert any(x.field == '用户占比' for x in v2)
