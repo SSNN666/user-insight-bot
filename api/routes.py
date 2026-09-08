@@ -737,3 +737,20 @@ async def stats_flow(force: bool = False):
         return flows
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── LLM 成本与运行观测(Phase: cost observability)──────────────────
+
+
+@router.get("/metrics/usage")
+async def metrics_usage(hours: int = Query(default=168, ge=1, le=24 * 30)):
+    """LLM 用量/成本聚合(近 N 小时):总量、按天、按模型、按角色、降级率。"""
+    from llm.metrics import usage_summary
+    return usage_summary(hours=hours)
+
+
+@router.get("/metrics/tiers")
+async def metrics_tiers(hours: int = Query(default=168, ge=1, le=24 * 30)):
+    """数据降级链实际选层分布(近 N 小时)。"""
+    from llm.metrics import tier_summary
+    return tier_summary(hours=hours)

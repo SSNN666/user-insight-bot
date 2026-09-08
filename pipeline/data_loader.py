@@ -568,6 +568,12 @@ def load_orders_with_join() -> pd.DataFrame:
                 # Tier 2 can return None on cache miss → skip to next tier
                 logger.debug("tier_skipped", extra={"tier": name})
                 continue
+            # 成本观测:记录本轮实际选中的降级层(best-effort)
+            try:
+                from llm.metrics import record_data_tier
+                record_data_tier(name, len(result))
+            except Exception:
+                pass
             return result
         except (DatabaseError, ComputationError) as e:
             logger.warning("tier_failed", extra={"tier": name, "error": str(e)})
@@ -592,6 +598,11 @@ def load_new_orders_since(since_date: str) -> pd.DataFrame:
         try:
             df = loader()
             logger.info("delta_loaded", extra={"since": since_date, "rows": len(df)})
+            try:
+                from llm.metrics import record_data_tier
+                record_data_tier(name, len(df))
+            except Exception:
+                pass
             return df
         except (DatabaseError, ComputationError) as e:
             logger.warning("tier_failed", extra={"tier": name, "error": str(e)})

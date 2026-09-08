@@ -233,7 +233,7 @@ eval/         6 files  评测（LLM-Judge + Hit/MRR + 检索评测）
 llm/          2 files  LLM客户端（连接池 + 重试 + Token统计）
 config/       2 files  Pydantic-settings（50+配置项）
 log/          2 files  JSON结构化日志
-tests/        28 files  322 项测试（308 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
+tests/        28 files  329 项测试（315 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
 frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 docs/         2 files  数据合规 + 评分阈值校准报告
 root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
@@ -264,7 +264,7 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 > "不用 astream_events——因为 tools 节点是直接执行 Skill 而不是走 ToolNode,不会产生 on_tool_start 事件。用 graph.astream 的三种 stream mode 组合:custom 模式由节点内 get_stream_writer 发 node_start/tool_call/tool_result 事件,updates 模式取节点结果和事实核查结论,messages 模式拿 decide 节点的 token 级 delta。前端用原生 fetch 手写 SSE 帧解析、渲染步骤条,token 打完再用 answer 事件做权威全文覆盖——因为 respond 节点可能修正 Markdown、fact_check 会追加警告。"
 
 ### Q: 测试怎么设计的？
-> "分层设计,322 个用例(后端 308 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
+> "分层设计,329 个用例(后端 315 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
 
 ### Q: 怎么部署？
 > "docker compose up -d 一键启动全部 4 个服务。Ollama 拆了独立的 GPU profile——纯 CPU 环境用 OpenAI 兼容 API 也能跑。前端用 Nginx 做反向代理，/api/* 自动转发。GitHub Actions 在每次 push 自动跑测试和导入校验。"
@@ -290,7 +290,7 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → HIGH 事件自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析,三段结果落库可查;分群历史快照画成时间趋势图
 5. 数据飞轮——用户反馈 + 自动评分 → 高质量样本入库 → 向量索引 → 反哺 Agent 系统提示
 6. 会话记忆持久化(JSON checkpointer,重启不丢)+ 长对话自动摘要;个性化推荐闭环(图像标签→画像→打分推荐→一键加购)
-7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 322 个测试（308 pytest + 14 vitest）
+7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 329 个测试（315 pytest + 14 vitest）
 
 **Result**：
 - 三层核查下事实准确率接近 100%
@@ -324,7 +324,7 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 - [ ] SSE 三 stream mode 组合 + 事件 schema(meta/node_start/tool_call/delta/answer/done)
 - [ ] 注入检测 + 内容审核 fail-open 的取舍
 - [ ] Trace 节点耗时是实测的(不是估算)
-- [ ] 322 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成 + 前端 14 vitest)能讲
+- [ ] 329 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成 + 前端 14 vitest)能讲
 - [ ] Skill 工程化:SKILL.md 声明式(YAML frontmatter + Markdown 指令)、加 Skill 不碰代码、tool vs instruction 两类(Skill≠Tool)、两层发现(注册表推导场景绑定 + 描述检索打分)、渐进式披露(600/2400 上限)、SKILL_ENABLED 真实生效
 - [ ] 滚动揭晓:刚体平移 vs 逐日生长、预热/STEP/稳态、按墙钟日幂等、指纹只含窗口数、funnel 独立读 CSV 同口径截断、/debug/reveal-status 与 reveal-advance
 - [ ] HIGH 事件三阶段流水线的触发与结果落库

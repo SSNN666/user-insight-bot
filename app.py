@@ -1069,6 +1069,99 @@ def create_ui():
             )
 
         # ════════════════════════════════════════════════════════
+        # Tab: LLM 成本观测(Phase: cost observability)
+        # ════════════════════════════════════════════════════════
+        with gr.Tab("💰 LLM 成本"):
+            gr.Markdown(
+                "每问成本 / 降级链命中 / 数据层选择 —— 数据来自 `llm_metrics.db`"
+                "(成本为单价表估算,见 [llm/metrics.py](llm/metrics.py))。")
+
+            cost_refresh_btn = gr.Button("🔄 刷新成本", variant="primary")
+            with gr.Row():
+                c_cost = gr.Number(label="估算总成本(元)", value=0.0, precision=4)
+                c_req = gr.Number(label="LLM 请求数", value=0, precision=0)
+                c_tok = gr.Number(label="总 Token", value=0, precision=0)
+                c_deg = gr.Number(label="降级请求", value=0, precision=0)
+                c_lat = gr.Number(label="平均延迟(ms)", value=0, precision=1)
+
+            with gr.Row():
+                c_day_fig = gr.Plot(label="近 7 日成本")
+                c_model_fig = gr.Plot(label="按模型成本")
+                c_tier_fig = gr.Plot(label="数据降级链选层")
+
+            gr.Markdown("### 按角色明细")
+            c_role_df = gr.Dataframe(
+                label="角色 × Token/成本/降级",
+                headers=["角色", "请求", "Token", "成本(元)", "降级"])
+
+            def refresh_cost():
+                try:
+                    usage = _get("/metrics/usage", params={"hours": 168})
+                    tiers = _get("/metrics/tiers", params={"hours": 168})
+                    fig_day = fig_model = fig_tier = None
+
+                    # 近 7 日成本柱状(取 by_day 尾部 7 天)
+                    days = (usage.get("by_day") or [])[-7:]
+                    if days:
+                        f, ax = plt.subplots(figsize=(6, 3.2))
+                        xs = [d["day"][5:] for d in days]
+                        ys = [d["cost"] for d in days]
+                        ax.bar(xs, ys, color="#C44E52", alpha=0.85)
+                        ax.set_title("近 7 日 LLM 成本(估算元)", fontweight="bold")
+                        ax.set_ylabel("元")
+                        for label in ax.get_xticklabels():
+                            label.set_rotation(30)
+                            label.set_ha("right")
+                        f.tight_layout()
+                        fig_day = f
+
+                    # 按模型成本水平条
+                    by_model = usage.get("by_model") or []
+                    if by_model:
+                        f, ax = plt.subplots(figsize=(6, max(2.2, 0.5 * len(by_model))))
+                        names = [f"{m['provider']}/{m['model']}" for m in by_model]
+                        costs = [m["cost"] for m in by_model]
+                        ax.barh(names[::-1], costs[::-1], color="#4C72B0")
+                        ax.set_title("按模型估算成本", fontweight="bold")
+                        ax.set_xlabel("元")
+                        f.tight_layout()
+                        fig_model = f
+
+                    # 数据降级链选层
+                    if tiers:
+                        f, ax = plt.subplots(figsize=(6, 3.2))
+                        names = [t["tier"] for t in tiers]
+                        counts = [t["n"] for t in tiers]
+                        colors = ["#55A868" if n == "MySQL" else "#4C72B0"
+                                  for n in names]
+                        ax.bar(names, counts, color=colors)
+                        ax.set_title("数据加载实际选层(MySQL=绿,降级=蓝)", fontweight="bold")
+                        ax.set_ylabel("加载次数")
+                        f.tight_layout()
+                        fig_tier = f
+
+                    roles = usage.get("by_role") or []
+                    role_rows = [[r["role"], r["n"], r["tk"], r["cost"], r["deg"]]
+                                 for r in roles]
+                    return (
+                        usage.get("total_cost_rmb", 0.0),
+                        usage.get("requests", 0),
+                        usage.get("tokens", 0),
+                        usage.get("degraded_requests", 0),
+                        usage.get("avg_latency_ms", 0),
+                        fig_day, fig_model, fig_tier, role_rows,
+                    )
+                except Exception as e:
+                    print(f"[cost tab] refresh failed: {e}")
+                    return (0.0, 0, 0, 0, 0, None, None, None, [])
+
+            cost_refresh_btn.click(
+                refresh_cost,
+                outputs=[c_cost, c_req, c_tok, c_deg, c_lat,
+                         c_day_fig, c_model_fig, c_tier_fig, c_role_df],
+            )
+
+        # ════════════════════════════════════════════════════════
         # Tab 5: Agent Trace
         # ════════════════════════════════════════════════════════
         with gr.Tab("🔍 Agent Trace"):

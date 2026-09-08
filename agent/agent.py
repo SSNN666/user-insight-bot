@@ -891,6 +891,13 @@ def _ask_agent_internal(
         except Exception:
             pass  # observability is best-effort
 
+        # 成本观测:per-run usage → llm_metrics(best-effort,失败不影响回答)
+        try:
+            from llm.metrics import record_usage_bucket
+            record_usage_bucket(session_id, usage_bucket, kind="ask")
+        except Exception:
+            pass  # metrics is best-effort
+
         # respond
         record_span(session_id, "respond", timings.get("respond", 0), tokens_used=0,
                     input_summary="基于工具数据生成最终回答",
@@ -1087,6 +1094,13 @@ async def _ask_agent_stream(
                         metadata={"stream": True})
         finish_trace(session_id, answer,
                      fact_check_passed=fc_passed, violation_count=fc_violations)
+
+        # 成本观测(流式路径,best-effort)
+        try:
+            from llm.metrics import record_usage_bucket
+            record_usage_bucket(session_id, usage_bucket, kind="ask")
+        except Exception:
+            pass  # metrics is best-effort
 
         yield {"event": "answer", "content": answer}
         yield {

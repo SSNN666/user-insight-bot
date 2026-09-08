@@ -3,7 +3,7 @@
 > AI-Native E-commerce User Profiling & Autonomous Analytics Platform
 
 [![CI](https://github.com/SSNN666/user-insight-bot/actions/workflows/test.yml/badge.svg)](https://github.com/SSNN666/user-insight-bot/actions/workflows/test.yml)
-[![tests: 322 passed](https://img.shields.io/badge/tests-322%20passed-brightgreen)]()
+[![tests: 329 passed](https://img.shields.io/badge/tests-329%20passed-brightgreen)]()
 [![LangGraph](https://img.shields.io/badge/LangGraph-1.2-blue)]()
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.139-blue)]()
 [![Vue 3](https://img.shields.io/badge/Vue%203-3.5-42b883)]()
@@ -91,7 +91,7 @@ flowchart TB
     subgraph Eval["评测体系"]
         HR["Hit Rate / MRR"]
         Ragas["RAGAS LLM-Judge"]
-        Unit["297项测试"]
+        Unit["329项测试"]
     end
 
     Vue -->|"HTTP"| Router
@@ -270,7 +270,7 @@ TIANCHI_REVEAL_STEP=1           # 每墙钟日新增天数(>1 加速演示)
 
 - 完整逐问明细: `eval/results/latest_report.json`(2026-07 基线)
 - 重跑:`uv run python -m eval.retrieval_eval`(本地 Ollama embedding 或云端适配器)
-- 代码质量:**322 项测试**(308 pytest + 14 vitest,纯函数 / Agent 图剧本化 / API 集成 / 前端,全部离线秒级)+ CI 每 push 自动执行
+- 代码质量:**329 项测试**(315 pytest + 14 vitest,纯函数 / Agent 图剧本化 / API 集成 / 前端,全部离线秒级)+ CI 每 push 自动执行
 - 飞轮评分阈值经 89 条真实样本校准:正样本 0.50-0.85 / 负样本 0.0-0.25,0.5 阈值空带分离,详见 [docs/SCORER_CALIBRATION.md](docs/SCORER_CALIBRATION.md)
 
 ## API 概览
@@ -304,7 +304,7 @@ TIANCHI_REVEAL_STEP=1           # 每墙钟日新增天数(>1 加速演示)
 ├── common/         # 公共工具（json_repair / guardrails / content_moderation）
 ├── config/         # Pydantic-settings 配置中心
 ├── log/            # JSON 结构化日志
-├── tests/          # 322 项测试(308 pytest + 14 vitest:纯函数 + Agent 图 + API 集成 + 前端)
+├── tests/          # 329 项测试(315 pytest + 14 vitest:纯函数 + Agent 图 + API 集成 + 前端)
 ├── docs/           # 数据合规(DATA_COMPLIANCE.md)+ 飞轮评分阈值校准(SCORER_CALIBRATION.md)
 ├── frontend/       # Vue 3 电商商城
 ├── app.py          # Gradio 管理台（5 Tab）
