@@ -234,11 +234,105 @@ class JSONCheckpointSaver(BaseCheckpointSaver):
         return self.delete_thread(thread_id)
 
 
+# ── Postgres 双轨(checkpoint-postgres,生产语义)──────────────────
+# 仅 SESSION_STORE=postgres 时创建;连不上抛 RuntimeError(fail-fast)。
+# 官方 saver 依赖 psycopg 连接对象,同步/异步各持独立连接池。
+
+_PG_CONNECT_TIMEOUT = 5  # 池启动/探测超时(秒)
+
+
+def _pg_probe(dsn: str) -> None:
+    """启动探测:连不上直接抛清晰错误(不静默降级——状态宁可 fail 不可丢)。"""
+    import psycopg
+    try:
+        with psycopg.connect(dsn, connect_timeout=_PG_CONNECT_TIMEOUT) as conn:
+            conn.execute("SELECT 1")
+    except Exception as e:
+        raise RuntimeError(
+            "SESSION_STORE=postgres 连接失败(fail-fast,不静默降级到 JSON): "
+            f"{e!r}. 检查 SESSION_POSTGRES_DSN;本地起库参考: "
+            "docker run -d --name pg-session -p 5432:5432 "
+            "-e POSTGRES_PASSWORD=postgres postgres:16"
+        ) from e
+
+
+def _build_postgres_savers(dsn: str) -> tuple[object, object]:
+    """返回 (sync_saver, async_saver);均为懒打开池,首次调用建表。
+
+    checkpoint-postgres 的 from_conn_string 是上下文管理器形态,不适配本
+    项目的单例惰性代理 → 自持 psycopg 连接池(autocommit,与官方语义一致)。
+    """
+    _pg_probe(dsn)
+
+    from langgraph.checkpoint.postgres import PostgresSaver
+    from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+    from psycopg_pool import AsyncConnectionPool, ConnectionPool
+
+    sync_pool = ConnectionPool(
+        dsn, kwargs={"autocommit": True},
+        open=False, timeout=_PG_CONNECT_TIMEOUT,
+    )
+    sync_pool.open(wait=True, timeout=_PG_CONNECT_TIMEOUT)
+    sync_saver = PostgresSaver(sync_pool)
+
+    async_pool = AsyncConnectionPool(
+        dsn, kwargs={"autocommit": True},
+        open=False, timeout=_PG_CONNECT_TIMEOUT,
+    )
+
+    class _AsyncSaverProxy:
+        """包装 AsyncPostgresSaver:事件循环内调用 + 首次使用时建表。
+
+        LangGraph 官方 AsyncPostgresSaver 需要 async 上下文内 await setup;
+        这里做进程级单例化,首次任一异步方法触发建表。
+        """
+
+        def __init__(self):
+            self._inner: object | None = None
+
+        async def _ensure(self):
+            if self._inner is None:
+                await async_pool.open(wait=True, timeout=_PG_CONNECT_TIMEOUT)
+                self._inner = AsyncPostgresSaver(async_pool)
+                await self._inner.setup()
+                logger.info("session_pg_async_ready")
+            return self._inner
+
+        async def aget_tuple(self, config):
+            return await (await self._ensure()).aget_tuple(config)
+
+        async def aput(self, config, checkpoint, metadata, new_versions):
+            return await (await self._ensure()).aput(
+                config, checkpoint, metadata, new_versions)
+
+        async def aput_writes(self, config, writes, task_id, task_path: str = ""):
+            return await (await self._ensure()).aput_writes(
+                config, writes, task_id, task_path)
+
+        async def alist(self, config=None, *, filter=None, before=None, limit=None):
+            async for tup in (await self._ensure()).alist(
+                    config, filter=filter, before=before, limit=limit):
+                yield tup
+
+        async def adelete_thread(self, thread_id: str):
+            return await (await self._ensure()).adelete_thread(thread_id)
+
+    sync_saver.setup()
+    logger.info("session_pg_sync_ready")
+    return sync_saver, _AsyncSaverProxy()
+
+
 class LazyCheckpointSaver(BaseCheckpointSaver):
     """惰性代理:首次调用时才按当前配置创建底层 saver。
 
     原因:模块级图在 import 时构建,而配置(会话目录)必须等运行环境就绪
     (测试的 conftest 会先重定向所有磁盘路径)——延迟到首次调用即自动适配。
+
+    双轨:
+    - ``SESSION_STORE=json``(默认):JSONCheckpointSaver,异步走同步文件 IO;
+    - ``SESSION_STORE=postgres``:同步路径走官方 PostgresSaver、异步路径走
+      AsyncPostgresSaver(各自独立连接池);启动/首次调用连接失败抛
+      RuntimeError(fail-fast,不静默降级)。
     """
 
     serde = JsonPlusSerializer()
@@ -246,9 +340,23 @@ class LazyCheckpointSaver(BaseCheckpointSaver):
     def __init__(self):
         super().__init__()
         self._inner: JSONCheckpointSaver | None = None
+        self._pg_sync: object | None = None
+        self._pg_async: object | None = None
         self._lock = threading.Lock()
 
-    def _ensure(self) -> JSONCheckpointSaver:
+    @property
+    def _store_mode(self) -> str:
+        from config.settings import get_settings
+        return get_settings().SESSION_STORE
+
+    def warmup(self) -> None:
+        """启动期预热:postgres 模式立即建连 + 建表(fail-fast 于启动而非首次请求);
+        json 模式仅预创建目录。"""
+        self._ensure()
+
+    def _ensure(self):
+        if self._store_mode == "postgres":
+            return self._ensure_pg_sync()
         if self._inner is None:
             with self._lock:
                 if self._inner is None:
@@ -262,6 +370,25 @@ class LazyCheckpointSaver(BaseCheckpointSaver):
                         "ttl_days": settings.SESSION_TTL_DAYS,
                     })
         return self._inner
+
+    def _ensure_pg_sync(self):
+        if self._pg_sync is None:
+            with self._lock:
+                if self._pg_sync is None:
+                    from config.settings import get_settings
+                    dsn = get_settings().SESSION_POSTGRES_DSN
+                    if not dsn:
+                        raise RuntimeError(
+                            "SESSION_STORE=postgres 但未配置 SESSION_POSTGRES_DSN "
+                            "(fail-fast:状态存储不可静默降级)")
+                    self._pg_sync, self._pg_async = _build_postgres_savers(dsn)
+        return self._pg_sync
+
+    async def _ensure_pg_async_inner(self):
+        # 惰性:先确保同步侧探测过配置(含 DSN 缺失校验),异步池首用时打开
+        self._ensure_pg_sync()
+        assert self._pg_async is not None
+        return self._pg_async
 
     def get_tuple(self, config):
         return self._ensure().get_tuple(config)
@@ -279,18 +406,33 @@ class LazyCheckpointSaver(BaseCheckpointSaver):
         return self._ensure().delete_thread(thread_id)
 
     async def aget_tuple(self, config):
+        if self._store_mode == "postgres":
+            return await (await self._ensure_pg_async_inner()).aget_tuple(config)
         return self._ensure().get_tuple(config)
 
     async def aput(self, config, checkpoint, metadata, new_versions):
+        if self._store_mode == "postgres":
+            return await (await self._ensure_pg_async_inner()).aput(
+                config, checkpoint, metadata, new_versions)
         return self._ensure().put(config, checkpoint, metadata, new_versions)
 
     async def aput_writes(self, config, writes, task_id, task_path: str = ""):
+        if self._store_mode == "postgres":
+            return await (await self._ensure_pg_async_inner()).aput_writes(
+                config, writes, task_id, task_path)
         return self._ensure().put_writes(config, writes, task_id, task_path)
 
     async def alist(self, config=None, *, filter=None, before=None, limit=None):
+        if self._store_mode == "postgres":
+            async for tup in (await self._ensure_pg_async_inner()).alist(
+                    config, filter=filter, before=before, limit=limit):
+                yield tup
+            return
         async for tup in self._ensure().alist(config, filter=filter,
                                               before=before, limit=limit):
             yield tup
 
     async def adelete_thread(self, thread_id: str):
+        if self._store_mode == "postgres":
+            return await (await self._ensure_pg_async_inner()).adelete_thread(thread_id)
         return self._ensure().delete_thread(thread_id)

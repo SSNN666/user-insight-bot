@@ -5,7 +5,7 @@ import time
 import pytest
 from langchain_core.messages import HumanMessage, AIMessage
 
-from agent.session_store import JSONCheckpointSaver
+from agent.session_store import JSONCheckpointSaver, LazyCheckpointSaver
 
 
 def _checkpoint(msgs: list) -> dict:
@@ -102,3 +102,36 @@ class TestGraphRestart:
         assert "你好" in contents          # 第一轮用户消息仍在
         assert "你好,我是助手" in contents   # 第一轮 AI 回复仍在
         assert "再见!" in contents
+
+
+# ── 双轨:postgres 模式选择与 fail-fast(离线,不依赖真实 PG)──────────
+
+
+class TestStoreDualTrack:
+    def test_default_store_is_json(self):
+        """SESSION_STORE 默认 json:代理懒建 JSON saver。"""
+        saver = LazyCheckpointSaver()
+        assert isinstance(saver._ensure(), JSONCheckpointSaver)
+
+    def test_json_warmup_ok(self):
+        """json 模式 warmup 不抛错(预创建会话目录)。"""
+        LazyCheckpointSaver().warmup()
+
+    def test_postgres_mode_without_dsn_fails_fast(self, monkeypatch):
+        """SESSION_STORE=postgres 但 DSN 缺失 → 启动即抛,不静默降级。"""
+        monkeypatch.setenv("SESSION_STORE", "postgres")
+        monkeypatch.setenv("SESSION_POSTGRES_DSN", "")
+        saver = LazyCheckpointSaver()
+        with pytest.raises(RuntimeError, match="未配置 SESSION_POSTGRES_DSN"):
+            saver.warmup()
+
+    def test_postgres_mode_unreachable_dsn_fails_fast(self, monkeypatch):
+        """DSN 连不上 → fail-fast RuntimeError(端口 1 必然拒绝,毫秒级)。"""
+        monkeypatch.setenv("SESSION_STORE", "postgres")
+        monkeypatch.setenv(
+            "SESSION_POSTGRES_DSN",
+            "postgresql://nobody:nope@127.0.0.1:1/nodb?connect_timeout=2",
+        )
+        saver = LazyCheckpointSaver()
+        with pytest.raises(RuntimeError, match="SESSION_STORE=postgres 连接失败"):
+            saver.warmup()

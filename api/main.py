@@ -1,12 +1,19 @@
 """FastAPI application factory."""
 
 import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config.settings import get_settings
+
+# Windows 事件循环策略:psycopg(async) 不兼容默认 ProactorEventLoop,
+# 仅 SESSION_STORE=postgres 时切 SelectorEventLoop(生产 Linux 无此问题,
+# 默认行为完全不变——策略在 uvicorn 建环前于模块 import 时生效)
+if os.name == "nt" and get_settings().SESSION_STORE == "postgres":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 from api.routes import router
 from api.middleware import (
     RequestLoggingMiddleware,
@@ -22,6 +29,17 @@ async def lifespan(app: FastAPI):
     """Startup: launch watcher background task. Shutdown: stop watcher."""
     settings = get_settings()
     watcher_task: asyncio.Task | None = None
+
+    # 会话存储预热:SESSION_STORE=postgres 时启动即建连/建表,
+    # 连不上直接抛错阻止启动(fail-fast——状态不静默降级,宁缺勿假)
+    try:
+        from agent.session_store import LazyCheckpointSaver
+        LazyCheckpointSaver().warmup()
+    except RuntimeError as e:
+        get_logger("api.lifespan").critical("session_store_fail_fast", extra={
+            "error": str(e),
+        })
+        raise
 
     if settings.WATCHER_ENABLED:
         from watcher.engine import get_watcher_engine

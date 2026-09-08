@@ -164,6 +164,11 @@ class Settings(BaseSettings):
     # ── 会话记忆(持久化 + 长对话摘要) ──
     SESSION_DIR: str = "cache_data/sessions"   # 会话 checkpoint 持久化目录(重启不丢多轮上下文)
     SESSION_TTL_DAYS: float = 7.0              # 过期会话文件自动清理
+    # 会话存储双轨:默认 "json"(零依赖文件版,演示级);"postgres" = LangGraph
+    # 官方 checkpoint-postgres(生产语义,需 SESSION_POSTGRES_DSN,连不上启动即报错
+    # fail-fast——状态不静默降级,只有主动切换才会碰到该分支)
+    SESSION_STORE: str = "json"                # "json" | "postgres"
+    SESSION_POSTGRES_DSN: str = ""             # 如 postgresql://postgres:postgres@127.0.0.1:5432/langgraph
     CONVERSATION_SUMMARY_ENABLED: bool = True  # 消息数超阈值时压缩历史为摘要
     CONVERSATION_SUMMARY_THRESHOLD: int = 10   # 触发摘要的消息数阈值
     CONVERSATION_KEEP_RECENT: int = 4          # 摘要后保留最近 N 条原文
