@@ -67,7 +67,7 @@ def _try_mysql_joined(since_date: str | None = None) -> pd.DataFrame:
                     o.order_id, o.user_id, u.username, u.reg_date,
                     u.city, u.age, u.gender,
                     o.product_id, p.product_name, p.category,
-                    p.price AS unit_price,
+                    p.price AS unit_price, p.price AS price,
                     o.quantity, o.total_amount, o.order_date
                 FROM orders o
                 JOIN users u ON o.user_id = u.user_id
@@ -125,7 +125,32 @@ def _try_cache_joined() -> pd.DataFrame | None:
 #   - type=4(下单)行为行 → 一条订单明细(quantity=1);F=下单次数,M=Σ价格
 #   - JData 不含价格字段 → 按 (cate, brand) 做 md5 确定性合成价格(50-5000 元,
 #     同一商品跨运行稳定,快照对比不受影响)
-#   - 分类/品牌为数字编码,不做中文映射(推荐 Skill 品类不匹配时自动回退热门商品)
+#   - JData 无商品名字段、品类为数字编码 → 按 (品类码 → 中文品类 + 品名词库)
+#     确定性合成可检索的商品名(如 "耳机-9001"/品类"影音数码"),与价格合成
+#     同级演示口径(商城中文搜索/品类筛选/漏斗分组因此可用;原数字码商品名
+#     无法支撑任何自然语言检索)。真实性与合成边界如实记录在 DATA_COMPLIANCE.md
+#   - 合成映射集中在 _JD_CATE_ZH,唯一事实源,全部消费方同源
+
+# JData 品类码(实测 8 个:4-11)→ (中文品类, 品名词库);词按 sku 哈希确定性分配
+_JD_CATE_ZH: dict[str, tuple[str, tuple[str, ...]]] = {
+    "4":  ("影音数码", ("耳机", "音箱", "麦克风", "便携播放器")),
+    "5":  ("电脑办公", ("键盘", "鼠标", "显示器", "笔记本支架")),
+    "6":  ("手机配件", ("手机壳", "充电器", "数据线", "移动电源")),
+    "7":  ("家用电器", ("台灯", "电水壶", "吸尘器", "电风扇")),
+    "8":  ("时尚服饰", ("运动鞋", "T恤", "休闲外套", "双肩背包")),
+    "9":  ("美妆个护", ("洗面奶", "面膜", "电动牙刷", "护肤套装")),
+    "10": ("食品生鲜", ("坚果礼盒", "茶叶", "咖啡豆", "零食组合")),
+    "11": ("图书文娱", ("小说精选", "工具书", "文具套装", "儿童绘本")),
+}
+_JD_CATE_ZH_FALLBACK: tuple[str, tuple[str, ...]] = ("其他", ("精选好物",))
+
+
+def _jdata_zh_product(cate: object, sku: int) -> tuple[str, str]:
+    """(品类码, sku) → (中文品类, 可检索中文商品名),确定性(跨运行稳定)。"""
+    zh_cate, words = _JD_CATE_ZH.get(str(cate), _JD_CATE_ZH_FALLBACK)
+    h = int(hashlib.md5(f"sku:{sku}".encode("utf-8")).hexdigest()[:4], 16)
+    word = words[h % len(words)]
+    return zh_cate, f"{word}-{sku}"
 #   - Action 表的 user_id/sku_id 是浮点("1.0"),加载时归一化为 int 才能与 User 表 join
 
 JDATA_ACTION_TYPE_ORDER = 4      # 官方行为编码:1=浏览 2=加购 3=删除 4=下单 5=关注 6=点击
@@ -262,8 +287,15 @@ def _build_orders_from_jdata(
     orders["total_amount"] = price_col
     orders["order_date"] = pd.to_datetime(orders["time"], errors="coerce")
     orders["product_id"] = orders["sku_id"]
-    orders["product_name"] = "SKU-" + orders["sku_id"].astype(str)
-    orders["category"] = orders["cate"].astype(str) if "cate" in orders.columns else "未知"
+    # 中文商品名/品类:JData 无名称字段 → 按品类码词库确定性合成(商城搜索/漏斗可演示)
+    if "cate" in orders.columns:
+        zh = orders.apply(
+            lambda r: _jdata_zh_product(r.get("cate"), r["sku_id"]), axis=1)
+        orders["category"] = [c for c, _ in zh]
+        orders["product_name"] = [n for _, n in zh]
+    else:
+        orders["category"] = "其他"
+        orders["product_name"] = "精选好物-" + orders["sku_id"].astype(str)
 
     # 用户维:age / 性别(sex 0/1/2)/ 注册时间(user_reg_tm,空值保留 NaT)
     u = users[["user_id", "age"]].copy()

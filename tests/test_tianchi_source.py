@@ -54,8 +54,12 @@ class TestBuildOrdersFromJdata:
         assert (df["quantity"] == 1).all()
         assert (df["total_amount"] == df["unit_price"]).all()
         assert (df["total_amount"] >= 50).all() and (df["total_amount"] <= 5000).all()
-        assert df.iloc[0]["category"] == "8"      # 分类保留原编码
-        assert df.iloc[0]["product_name"] == "SKU-9002"
+        # 商品中文化:品类码 → 中文品类 + 词库合成可检索名(首行 sku=9002, cate=8)
+        zh_cate, zh_name = dl._jdata_zh_product("8", 9002)
+        assert df.iloc[0]["product_id"] == 9002
+        assert df.iloc[0]["category"] == zh_cate
+        assert df.iloc[0]["product_name"] == zh_name
+        assert zh_cate != "8" and "SKU-" not in zh_name      # 不再是数字码/裸 SKU
 
     def test_user_attributes_mapped(self):
         df = dl._build_orders_from_jdata(_users_df(), _actions_df())
@@ -169,8 +173,10 @@ class TestFallbackChainIntegration:
     def test_tianchi_mode_inserts_jdata_tier(self, tmp_path, monkeypatch):
         self._setup(tmp_path, monkeypatch, data_source="tianchi")
         df = dl.load_orders_with_join()
-        assert df["product_name"].str.startswith("SKU-").any()      # JData 数据特征
-        assert df["category"].astype(str).str.isdigit().all()       # 数字编码分类
+        # JData 数据特征(商品中文化后):名称可检索中文、品类不再数字码
+        assert not df["product_name"].str.startswith("SKU-").any()
+        assert not df["category"].astype(str).str.isdigit().all()
+        assert any("一" <= ch <= "鿿" for ch in str(df["product_name"].iloc[0]))
         assert "gender" in df.columns
 
     def test_auto_mode_skips_jdata_falls_to_mock(self, tmp_path, monkeypatch):
@@ -278,3 +284,22 @@ class TestJdataDateShift:
         assert max_date.year == pd.Timestamp.now().year        # 已平移到今年
         assert max_date.date() == (
             pd.Timestamp.now().normalize() - pd.Timedelta(days=1)).date()  # 昨天
+
+
+class TestZhProductMapping:
+    """商品中文化映射:品类码→中文品类/词库,确定性 + 兜底。"""
+
+    def test_known_cate_deterministic(self):
+        a1 = dl._jdata_zh_product("8", 9001)
+        a2 = dl._jdata_zh_product("8", 9001)
+        assert a1 == a2                        # 跨运行稳定(快照对比不跳变)
+        assert a1[0] == "时尚服饰"
+        assert "9001" in a1[1] and "SKU-" not in a1[1]
+
+    def test_word_spread_within_cate(self):
+        words = {dl._jdata_zh_product("8", s)[1].split("-")[0] for s in range(100, 120)}
+        assert len(words) >= 2                 # 同品类内词库有分配多样性
+
+    def test_unknown_cate_fallback(self):
+        assert dl._jdata_zh_product("999", 1)[0] == "其他"
+        assert dl._jdata_zh_product(None, 1)[0] == "其他"

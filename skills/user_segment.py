@@ -3,6 +3,7 @@
 Phase 3: pipeline cache TTL, force-refresh, and ``RefreshPipelineSkill``.
 """
 
+import re
 import threading
 import time
 
@@ -360,6 +361,19 @@ class ProductSearchInput(BaseModel):
     category: str = Field(default="", description="按品类筛选，如'电子产品'、'时尚服饰'")
 
 
+def _segment_keyword(kw: str) -> list[str]:
+    """关键词切词:jieba 分词(命中 ≥2 字词);非中文串退回分隔符切。"""
+    import re as _re
+    try:
+        import jieba
+        words = [w for w in jieba.lcut(kw) if len(w) >= 2]
+        if words:
+            return words
+    except Exception:
+        pass
+    return [t for t in _re.split(r"[\s\-/、]+", kw) if len(t) >= 2]
+
+
 class ProductSearchSkill(BaseSkill):
     name = "search_products"
     description = (
@@ -381,12 +395,23 @@ class ProductSearchSkill(BaseSkill):
             if keyword:
                 kw = keyword.lower()
                 name_matches = [p for p in matches if kw in p["product_name"].lower()]
-                # Keyword doesn't match any product name — try matching as category too
                 cat_matches = [p for p in matches if kw in p.get("category", "").lower()]
+                # 中文复合词整串常命不中合成商品名("降噪耳机" vs "耳机-36692")
+                # → token 级兜底:jieba 分词,任一词命中即可(全词优先)
+                tokens = _segment_keyword(kw)
+                token_matches = []
+                if not name_matches and not cat_matches and len(tokens) > 1:
+                    token_matches = [
+                        p for p in matches
+                        if any(t in p["product_name"].lower() for t in tokens)
+                        or any(t in p.get("category", "").lower() for t in tokens)
+                    ]
                 if name_matches:
                     matches = name_matches
                 elif cat_matches:
                     matches = cat_matches
+                elif token_matches:
+                    matches = token_matches
                 else:
                     # 无任何匹配 → 空结果(否则会带着全量商品返回 success,
                     # LLM 误以为"找到相关商品",从全量列表编推荐 → 幻觉)
