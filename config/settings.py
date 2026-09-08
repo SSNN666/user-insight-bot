@@ -196,8 +196,10 @@ class Settings(BaseSettings):
     FLYWHEEL_DB_PATH: str = "cache_data/flywheel.db"
     FLYWHEEL_UPDATE_INTERVAL: int = 600
     FLYWHEEL_RETRIEVAL_TOP_K: int = 3
-    FLYWHEEL_VECTOR_BACKEND: str = "milvus"   # "milvus" | "memory"
+    FLYWHEEL_VECTOR_BACKEND: str = "milvus"   # "milvus"=Milvus-lite(默认) | "milvus-remote"=独立 Milvus | "memory"
     FLYWHEEL_MILVUS_DATA_DIR: str = "cache_data/milvus_vectors"
+    # 远端 Milvus(生产级 standalone / 容器):本地一键起见 docker-compose.milvus.yml
+    FLYWHEEL_MILVUS_URI: str = "http://127.0.0.1:19530"
     # Thresholds
     EVENT_THRESHOLD_PCT: float = 20.0
     SEGMENT_RATIO_THRESHOLD_PCT: float = 10.0

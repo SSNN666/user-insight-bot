@@ -430,6 +430,141 @@ class MilvusVectorStore(_VectorStoreBase):
                 logger.debug("milvus_close_error", extra={"error": str(exc)[:200]})
 
 
+# ══════════════════════════════════════════════════════════════════
+# Backend 3: Remote Milvus standalone (pymilvus MilvusClient, 生产级)
+# ══════════════════════════════════════════════════════════════════
+
+
+class RemoteMilvusVectorStore(_VectorStoreBase):
+    """独立 Milvus(standalone/集群)后端 — 经 pymilvus ``MilvusClient`` 走 gRPC。
+
+    与 lite 后端同一接口、同一 schema 语义;默认仍是 lite(零依赖),
+    ``FLYWHEEL_VECTOR_BACKEND=milvus-remote`` 切换(本地一键起:
+    ``docker compose -f docker-compose.milvus.yml up -d``)。
+
+    - 容器连不上/初始化失败 → 自动回退内存后端(lite 同款降级哲学);
+    - 支持注入 ``client``(测试用假客户端,离线验证协议正确性);
+    - 生产级特性与 lite 的差异就是卖点:无 Windows 文件锁、upsert 原子、
+      独立进程不占本地磁盘。
+    """
+
+    def __init__(self, uri: str | None = None, client=None):
+        settings = get_settings()
+        self._uri = uri or settings.FLYWHEEL_MILVUS_URI
+        self._client = client
+        self._fallback: InMemoryVectorStore | None = None
+        self._init_client()
+
+    def _init_client(self) -> None:
+        try:
+            if self._client is None:
+                from pymilvus import MilvusClient
+                self._client = MilvusClient(uri=self._uri)
+            # 轻量探测:远端可达性(失败 → 内存兜底)
+            self._client.list_collections()
+            self._ensure_collection()
+            logger.info("vector_store_init", extra={
+                "backend": "milvus-remote",
+                "uri": self._uri,
+            })
+        except Exception as exc:
+            logger.warning("milvus_remote_init_failed", extra={
+                "uri": self._uri, "error": str(exc)[:200],
+            })
+            self._fallback = InMemoryVectorStore()
+
+    def _ensure_collection(self) -> None:
+        name = _MILVUS_COLLECTION_NAME
+        if name in (self._client.list_collections() or []):
+            return
+        from pymilvus import CollectionSchema, DataType, FieldSchema
+        schema = CollectionSchema(
+            fields=[
+                FieldSchema(name="id", dtype=DataType.INT64,
+                            is_primary=True, auto_id=False),
+                FieldSchema(name="question", dtype=DataType.VARCHAR, max_length=512),
+                FieldSchema(name="reply", dtype=DataType.VARCHAR, max_length=1024),
+                FieldSchema(name="embedding", dtype=DataType.FLOAT_VECTOR, dim=_dim()),
+            ],
+            enable_dynamic_field=False,
+        )
+        self._client.create_collection(name, schema=schema)
+        logger.info("milvus_remote_collection_created", extra={"collection": name})
+
+    def insert(self, sample_id: int, question: str, reply: str) -> None:
+        if self._fallback is not None:
+            return self._fallback.insert(sample_id, question, reply)
+        try:
+            embedding = embed_text(question, _dim())
+            self._client.upsert(
+                _MILVUS_COLLECTION_NAME,
+                data=[{
+                    "id": sample_id,
+                    "question": question[:500],
+                    "reply": reply[:1000],
+                    "embedding": embedding,
+                }],
+            )
+            logger.debug("vector_inserted", extra={"id": sample_id, "backend": "milvus-remote"})
+        except Exception as exc:
+            logger.error("milvus_remote_insert_failed", extra={
+                "id": sample_id, "error": str(exc)[:200],
+            })
+
+    def search(self, query: str, top_k: int = 5) -> list[dict]:
+        if self._fallback is not None:
+            return self._fallback.search(query, top_k)
+        try:
+            query_vec = embed_text(query, _dim())
+            if query_vec is None:
+                return []
+            res = self._client.search(
+                _MILVUS_COLLECTION_NAME,
+                data=[query_vec],
+                limit=top_k,
+                output_fields=["id", "question", "reply"],
+                search_params={"metric_type": "COSINE", "params": {}},
+            )
+            hits = (res or [[]])[0]
+            return [{
+                "id": hit.get("id"),
+                "question": (hit.get("entity") or {}).get("question", ""),
+                "reply": (hit.get("entity") or {}).get("reply", ""),
+                "similarity": round(float(hit.get("distance", 0.0)), 3),
+            } for hit in hits]
+        except Exception as exc:
+            logger.warning("milvus_remote_search_failed", extra={
+                "error": str(exc)[:200],
+            })
+            return []
+
+    def delete_by_id(self, sample_id: int) -> None:
+        if self._fallback is not None:
+            return self._fallback.delete_by_id(sample_id)
+        try:
+            self._client.delete(
+                _MILVUS_COLLECTION_NAME, filter=f"id == {sample_id}")
+        except Exception:
+            pass  # 行不存在属正常
+
+    def count(self) -> int:
+        if self._fallback is not None:
+            return self._fallback.count()
+        try:
+            stats = self._client.get_collection_stats(_MILVUS_COLLECTION_NAME)
+            return int((stats or {}).get("row_count", 0))
+        except Exception:
+            return 0
+
+    def close(self) -> None:
+        if self._client is not None and self._fallback is None:
+            try:
+                self._client.close()
+                logger.info("milvus_remote_closed")
+            except Exception:
+                pass
+
+
 # ── Factory ───────────────────────────────────────────────────────
 
 import threading as _threading
@@ -442,7 +577,8 @@ def get_vector_store() -> _VectorStoreBase:
     """Return the configured vector store backend.
 
     Reads ``FLYWHEEL_VECTOR_BACKEND`` from settings:
-    - ``"milvus"`` → persistent Milvus-lite (default)
+    - ``"milvus"`` → persistent Milvus-lite (default, 零依赖)
+    - ``"milvus-remote"`` → 独立 Milvus(pymilvus, 生产级;compose 一键起)
     - ``"memory"`` → in-memory cosine similarity
 
     Falls back to in-memory if Milvus fails to initialise.
@@ -461,6 +597,8 @@ def get_vector_store() -> _VectorStoreBase:
 
         if backend == "milvus":
             store = MilvusVectorStore()
+        elif backend == "milvus-remote":
+            store = RemoteMilvusVectorStore()
         else:
             store = InMemoryVectorStore()
 
@@ -473,6 +611,6 @@ def reset_vector_store() -> None:
     global _vector_store
     with _vector_store_lock:
         if _vector_store is not None:
-            if isinstance(_vector_store, MilvusVectorStore):
+            if isinstance(_vector_store, (MilvusVectorStore, RemoteMilvusVectorStore)):
                 _vector_store.close()
             _vector_store = None
