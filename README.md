@@ -127,6 +127,10 @@ cd frontend && npm install && npm run dev   # 5. Vue → :5173
 ### 2. 三层纯规则 FactCheck
 
 零 LLM 调用、毫秒级完成：Layer 1 数值校验 / Layer 2 规则校验 / Layer 3 逻辑校验。双档位管控（relaxed / strict）。
+数值层覆盖句式族持续收敛：直接陈述（"分群X有N人"、平均指标）、Markdown 表格行、阈值/区间，
+外加换说法族——占比 N%、全平台共 N 人（支持千分位）、"X 是 Y 的 N 倍"（人数词/指标词判别，
+消费倍数不误报人数核查）、"X 比 Y 多/少 N 人"（方向+量级双检）；"约/左右"按声称精度四舍五入容差。
+边界如实记录在模块 docstring：更隐蔽的改写不在覆盖内，由 relaxed 警告 + 前端数据源标注兜底，不做全检声称。
 
 ### 3. BM25 + Milvus 混合检索
 
@@ -145,6 +149,11 @@ Watcher 引擎后台轮询 → 快照对比 → 6 条规则 → 事件降噪/冷
 ### 6. 数据飞轮
 
 用户反馈 + 自动评分 → 向量入库 → 检索反哺 Agent 系统提示 → 回答质量越用越好。
+**向量后端可插拔**：默认 Milvus-lite（零依赖文件库）;`FLYWHEEL_VECTOR_BACKEND=milvus-remote`
+切独立 Milvus（pymilvus gRPC,生产级;`docker-compose.milvus.yml` 一键起 etcd/MinIO/Milvus
+三件套,国内拉镜像加 `IMAGE_PREFIX=docker.m.daocloud.io/`）;两者挂掉都自动回退内存,接口不变。
+评分阈值经真实样本校准（[docs/SCORER_CALIBRATION.md](docs/SCORER_CALIBRATION.md)）:
+89 条运行样本中正样本 0.50-0.85、负样本 0.0-0.25,0.26-0.49 为空带 → 0.5 阈值实证分离,无需调权。
 
 ### 7. 统一大模型适配器(与康养 RAG 项目共用)
 
@@ -166,8 +175,13 @@ Vue 前端步骤条实时渲染执行过程。
 
 ### 10. 会话记忆持久化 + 长对话摘要
 
-JSON 文件版 LangGraph CheckpointSaver:多轮上下文落盘,进程重启自动恢复(实测重启后
-仍记得历史对话);消息数超阈值自动压缩为要点摘要,上下文保持有界;过期会话按 TTL 清理。
+多轮上下文落盘,进程重启自动恢复(实测重启后仍记得历史对话);消息数超阈值自动压缩为要点
+摘要,上下文保持有界;过期会话按 TTL 清理。
+**存储双轨**：默认 `SESSION_STORE=json`（文件版,零依赖演示）;`SESSION_STORE=postgres`
+切 LangGraph 官方 checkpoint-postgres(生产语义):启动即建连/建表,**连不上 fail-fast 报错,
+不静默降级**——状态是业务记忆不是缓存,宁缺勿假;Windows 自动切 Selector 事件循环
+(psycopg async 要求),Linux 无此问题。真实 PG 实测:sync 重启恢复/async 事件循环/
+跨实例持久化全通过。
 
 ### 11. 个性化推荐闭环
 
@@ -247,9 +261,10 @@ TIANCHI_REVEAL_STEP=1           # 每墙钟日新增天数(>1 加速演示)
 ├── common/         # 公共工具（json_repair / guardrails / content_moderation）
 ├── config/         # Pydantic-settings 配置中心
 ├── log/            # JSON 结构化日志
-├── tests/          # 297 项测试(283 pytest + 14 vitest:纯函数 + Agent 图 + API 集成 + 前端)
-├── docs/           # 数据合规说明（DATA_COMPLIANCE.md）
+├── tests/          # 322 项测试(308 pytest + 14 vitest:纯函数 + Agent 图 + API 集成 + 前端)
+├── docs/           # 数据合规(DATA_COMPLIANCE.md)+ 飞轮评分阈值校准(SCORER_CALIBRATION.md)
 ├── frontend/       # Vue 3 电商商城
 ├── app.py          # Gradio 管理台（5 Tab）
-└── run_api.py      # FastAPI 启动入口
+├── run_api.py      # FastAPI 启动入口
+└── docker-compose.milvus.yml   # 独立 Milvus standalone(etcd/MinIO/Milvus,可选后端用)
 ```

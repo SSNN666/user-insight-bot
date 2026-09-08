@@ -65,7 +65,14 @@ Agent 六节点图:
 
 双档位：`relaxed`（追加 ⚠️ 警告）/ `strict`（拦截重生成，最多 2 次）。
 
-**面试说法**："Self-Reflection 不可靠——LLM 也会骗自己。我改成了纯规则引擎，事实核查 10ms 完成，不消耗额外 Token。"
+**覆盖句式族持续收敛**（对应旧短板"只认固定句式"）：直接陈述/表格行/阈值区间 + 换说法四族——
+占比 N%、总数（"全平台共 N 人"，千分位支持，须全局锚定词防子集误报）、倍数（"X 是 Y 的 N 倍"，
+人数词/指标词判别，消费倍数不误报人数）、差额（"X 比 Y 多/少 N 人"，方向+量级双检）；
+"约/左右"按声称精度四舍五入容差。对抗样本测试守护（13 例：正确说法零误报、编造全检出、
+长散文混合、掩码防跨段双报）。边界如实写进 docstring：更隐蔽改写不在覆盖内 → relaxed 警告 +
+前端数据源标注兜底，不做全检声称。
+
+**面试说法**："Self-Reflection 不可靠——LLM 也会骗自己。我改成了纯规则引擎，事实核查 10ms 完成，不消耗额外 Token。覆盖句式族从'分群X有N人'收敛到占比/总数/倍数/差额四种换说法——我加了对抗样本测试专门防'换个说法就漏'。规则有边界我承认，所以 relaxed 模式叠加数据源标注兜底，而不是假装全检。"
 
 ### 2. BM25 + Milvus 混合检索
 
@@ -166,6 +173,31 @@ MySQL :3306 → 连不上？
 真正检测到变化,数据必须逐日'长'出来。状态机每天 +1 天窗口,指纹驱动重算,
 演示时 /debug/reveal-advance 可手动推进,不用等真的一天。"
 
+### 8. 状态与存储的分层可插拔(演示不迁就,生产不裸奔)
+
+**问题**:作品级 demo 为了"clone 即跑"只能选零依赖方案(JSON 文件 / Milvus-lite),
+面试官追问"生产怎么办"时容易穿帮;反之直接上生产组件,demo 又跑不动。
+
+**方案**:一切按"默认轻量 + 可切换 + 降级链"分层,切换点都是配置:
+- **会话记忆双轨**:`SESSION_STORE=json`(默认,零依赖文件版)↔ `=postgres`
+  (LangGraph 官方 checkpoint-postgres,同步/异步各持连接池)。关键语义:
+  连不上 **fail-fast 启动报错,不静默降级**——状态是业务记忆不是缓存,
+  宁缺勿假;Windows 自动切 Selector 事件循环(psycopg async 要求)。
+  真实 PG 实测:sync 重启恢复 / async 事件循环 / 跨实例持久化全通过。
+- **向量后端可插拔**:`FLYWHEEL_VECTOR_BACKEND` = `milvus`(lite,默认)/
+  `milvus-remote`(pymilvus 连独立 Milvus)/ `memory`。同一接口三实现,
+  挂了自动回退内存;独立 compose(`docker-compose.milvus.yml`,etcd+
+  MinIO+Milvus 三件套,镜像前缀变量化)让"生产级验证"一条命令可复现。
+- **评分阈值实证**:不再说"经验值"——89 条真实样本校准
+  ([SCORER_CALIBRATION.md](docs/SCORER_CALIBRATION.md)):正样本 0.50-0.85、
+  负样本 0.0-0.25,0.26-0.49 为空带 → 0.5 阈值分离无争议,无需调权;
+  校准周期 ~200 条。
+
+**面试说法**:"每条'演示级'都留了生产开关,而且切换语义是显式设计的——
+会话存储 fail-fast 不静默降级,因为丢记忆比报错更糟;向量库三后端同接口,
+compose 一键起真 Milvus。剩下没做的(分布式锁、线上效果信号)我明说没做,
+不在文档里假装。"
+
 ---
 
 ## 项目演进（7 文件 → 65 文件，12 个 Phase）
@@ -191,18 +223,20 @@ MySQL :3306 → 连不上？
 ## 项目结构速览
 
 ```
-agent/       10 files  Agent核心（图 + 核查 + 编排 + Trace + Memory）
+agent/       10 files  Agent核心（图 + 核查 + 编排 + Trace + Memory,会话存储双轨:JSON/Postgres）
 api/          8 files  FastAPI（路由 + 中间件 + 电商 + 数据存储）
 pipeline/     4 files  数据流水线（加载 → 清洗 → RFM → 聚类 → 画像）
 skills/       3 files  可插拔 Skill（11 个工具，商品 3 + 分析 7 + 图像解析 1）
 watcher/      6 files  事件检测 + CDC + 任务管理
-flywheel/     7 files  飞轮（采集 → 评分 → BM25+Milvus检索 → 调度）
+flywheel/     7 files  飞轮（采集 → 评分 → BM25+Milvus检索 → 调度,向量后端 lite/远端/内存可插拔）
 eval/         6 files  评测（LLM-Judge + Hit/MRR + 检索评测）
 llm/          2 files  LLM客户端（连接池 + 重试 + Token统计）
 config/       2 files  Pydantic-settings（50+配置项）
 log/          2 files  JSON结构化日志
-tests/        23 files  297 项测试（283 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
+tests/        28 files  322 项测试（308 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
 frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
+docs/         2 files  数据合规 + 评分阈值校准报告
+root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 ```
 
 ---
@@ -230,7 +264,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 > "不用 astream_events——因为 tools 节点是直接执行 Skill 而不是走 ToolNode,不会产生 on_tool_start 事件。用 graph.astream 的三种 stream mode 组合:custom 模式由节点内 get_stream_writer 发 node_start/tool_call/tool_result 事件,updates 模式取节点结果和事实核查结论,messages 模式拿 decide 节点的 token 级 delta。前端用原生 fetch 手写 SSE 帧解析、渲染步骤条,token 打完再用 answer 事件做权威全文覆盖——因为 respond 节点可能修正 Markdown、fact_check 会追加警告。"
 
 ### Q: 测试怎么设计的？
-> "分层设计,297 个用例(后端 283 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
+> "分层设计,322 个用例(后端 308 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
 
 ### Q: 怎么部署？
 > "docker compose up -d 一键启动全部 4 个服务。Ollama 拆了独立的 GPU profile——纯 CPU 环境用 OpenAI 兼容 API 也能跑。前端用 Nginx 做反向代理，/api/* 自动转发。GitHub Actions 在每次 push 自动跑测试和导入校验。"
@@ -239,7 +273,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 > "LLM 幻觉问题经过了好几轮迭代——Self-Reflection → 发现不靠谱 → 纯规则核查 → strict 模式死循环 → 加最大重试次数。还有 Ollama 模型不支持 function calling 的问题，切到 qwen2.5:7b 又加了 text→tool_call 桥接。Milvus-lite 在 Windows 上有文件锁问题，从 upsert 改成 delete+insert，flush 改成批量。这些都是在真实环境中踩出来的。"
 
 ### Q: 有什么不足？
-> "诚实的短板:① 事实核查是正则规则引擎,只覆盖特定句式(表格行、'分群X有N人'),LLM 换一种说法会漏检——所以云端内容审核作为第二道防线,但覆盖仍是规则边界;② 会话持久化是 JSON 文件版 checkpointer,演示级够用,生产要换 Postgres checkpoint + 分布式锁;③ 飞轮评分器阈值是经验值,需要线上数据迭代校准;④ 百度内容审核免费档 QPS=1,输出审核偶有误伤(演示时可临时关闭)。这些我都知道边界在哪,不是不知道才不做。"
+> "诚实的短板:① 事实核查是正则规则引擎——句式族已从固定句式收敛到四种换说法(占比/总数/倍数/差额)并有对抗样本守护,但更隐蔽的改写仍会漏——覆盖是规则边界,靠 relaxed 警告 + 前端数据源标注兜底,不做全检声称;② 会话持久化已双轨:默认 JSON 演示零依赖,生产切官方 checkpoint-postgres(连不上 fail-fast 不静默降级,本地 compose 起 PG 实测重启恢复)——但**分布式锁仍未做**,多实例部署会话一致性还需要它;③ 飞轮评分器阈值经真实样本校准(89 条:正样本 0.50-0.85/负样本 0.0-0.25 空带分离,0.5 无需调权),但仍是代理信号而非线上效果数据,校准周期每 ~200 条;④ 百度内容审核免费档 QPS=1,输出审核偶有误伤(演示时可临时关闭)。这些我都知道边界在哪,不是不知道才不做。"
 
 ---
 
@@ -256,7 +290,7 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → HIGH 事件自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析,三段结果落库可查;分群历史快照画成时间趋势图
 5. 数据飞轮——用户反馈 + 自动评分 → 高质量样本入库 → 向量索引 → 反哺 Agent 系统提示
 6. 会话记忆持久化(JSON checkpointer,重启不丢)+ 长对话自动摘要;个性化推荐闭环(图像标签→画像→打分推荐→一键加购)
-7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 297 个测试（283 pytest + 14 vitest）
+7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 322 个测试（308 pytest + 14 vitest）
 
 **Result**：
 - 三层核查下事实准确率接近 100%
@@ -271,6 +305,10 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 
 - [ ] 六节点图拓扑能画出来
 - [ ] 三层 FactCheck 每层怎么做的说得清
+- [ ] FactCheck 换说法句式族(占比/总数/倍数/差额)+ 掩码防双报 + 13 例对抗样本
+- [ ] 会话双轨:json 默认/postgres 官方 saver/启动 fail-fast/Windows Selector 事件循环/PG 实测重启恢复
+- [ ] 向量后端可插拔:FLYWHEEL_VECTOR_BACKEND 三值、docker-compose.milvus.yml、回退内存
+- [ ] 评分校准结论:正 0.50-0.85/负 0.0-0.25 空带分离、0.5 无需调权、校准周期 ~200 条
 - [ ] BM25 + Milvus + RRF + LLM 重排的四阶段检索能讲
 - [ ] 飞轮正循环的闭环逻辑
 - [ ] Agent 工具物理隔离的做法
@@ -286,12 +324,12 @@ frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 - [ ] SSE 三 stream mode 组合 + 事件 schema(meta/node_start/tool_call/delta/answer/done)
 - [ ] 注入检测 + 内容审核 fail-open 的取舍
 - [ ] Trace 节点耗时是实测的(不是估算)
-- [ ] 297 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成 + 前端 14 vitest)能讲
+- [ ] 322 测试的三层设计(纯函数 / Agent 图剧本化 / API 集成 + 前端 14 vitest)能讲
 - [ ] Skill 工程化:SKILL.md 声明式(YAML frontmatter + Markdown 指令)、加 Skill 不碰代码、tool vs instruction 两类(Skill≠Tool)、两层发现(注册表推导场景绑定 + 描述检索打分)、渐进式披露(600/2400 上限)、SKILL_ENABLED 真实生效
 - [ ] 滚动揭晓:刚体平移 vs 逐日生长、预热/STEP/稳态、按墙钟日幂等、指纹只含窗口数、funnel 独立读 CSV 同口径截断、/debug/reveal-status 与 reveal-advance
 - [ ] HIGH 事件三阶段流水线的触发与结果落库
 - [ ] 分群时间趋势图的数据来源(快照历史)
-- [ ] 会话持久化的实现(JSON checkpointer 的 serde 桥接)与重启恢复演示
+- [ ] 会话持久化的实现(JSON serde 桥接 + PG 双轨)与重启恢复演示
 - [ ] 长对话摘要的触发条件与上下文有界性
 - [ ] 个性化推荐的打分因子(品类/标签/价格适配)
 - [ ] Docker Compose 的 4 个服务
