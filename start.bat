@@ -8,15 +8,22 @@ echo ============================================================
 echo.
 
 rem ── Docker 基础设施(PG 会话库 + Milvus 三件套)────────────────
-rem .env 走生产开关(SESSION_STORE=postgres / milvus-remote)时必起;
-rem 若切回默认(json/milvus-lite)本步自动幂等跳过(容器已在跑则 no-op)。
+rem 仅在 .env 切了生产开关(SESSION_STORE=postgres 或 milvus-remote)时拉起;
+rem 默认形态(json/milvus-lite,零依赖)自动跳过,克隆用户不受 Docker 干扰。
 set "DCK=E:\Docker\Docker\resources\bin\docker.exe"
 set "DD=E:\Docker\Docker\Docker Desktop.exe"
+set "NEED_DOCKER="
+findstr /C:"SESSION_STORE=postgres" .env >nul 2>&1 && set "NEED_DOCKER=1"
+findstr /C:"FLYWHEEL_VECTOR_BACKEND=milvus-remote" .env >nul 2>&1 && set "NEED_DOCKER=1"
 
-echo [0/3] Docker infra (Postgres + Milvus) ...
-call :ensure_docker_engine
-call :start_pg
-call :start_milvus
+if not defined NEED_DOCKER (
+    echo [0/3] Docker infra skipped (lightweight storage mode).
+) else (
+    echo [0/3] Docker infra (Postgres + Milvus) ...
+    call :ensure_docker_engine
+    call :start_pg
+    call :start_milvus
+)
 
 echo [1/3] FastAPI (:8000)
 start "API" cmd /k "cd /d %cd% && uv run python run_api.py"
