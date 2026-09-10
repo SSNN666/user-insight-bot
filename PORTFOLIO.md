@@ -72,7 +72,7 @@ Agent 六节点图:
 长散文混合、掩码防跨段双报）。边界如实写进 docstring：更隐蔽改写不在覆盖内 → relaxed 警告 +
 前端数据源标注兜底，不做全检声称。
 
-**面试说法**："Self-Reflection 不可靠——LLM 也会骗自己。我改成了纯规则引擎，事实核查 10ms 完成，不消耗额外 Token。覆盖句式族从'分群X有N人'收敛到占比/总数/倍数/差额四种换说法——我加了对抗样本测试专门防'换个说法就漏'。规则有边界我承认，所以 relaxed 模式叠加数据源标注兜底，而不是假装全检。"
+**面试说法**："Self-Reflection 不可靠——LLM 也会骗自己。我改成了纯规则引擎，事实核查平均 0.09ms 完成（实测 p50，`eval/factcheck_bench.py` 可复现），不消耗额外 Token。覆盖句式族从'分群X有N人'收敛到占比/总数/倍数/差额四种换说法——我加了对抗样本测试专门防'换个说法就漏'。规则有边界我承认，所以 relaxed 模式叠加数据源标注兜底，而不是假装全检。"
 
 ### 2. BM25 + Milvus 混合检索
 
@@ -255,7 +255,7 @@ eval/         6 files  评测（LLM-Judge + Hit/MRR + 检索评测）
 llm/          2 files  LLM客户端（连接池 + 重试 + Token统计）
 config/       2 files  Pydantic-settings（50+配置项）
 log/          2 files  JSON结构化日志
-tests/        28 files  329 项测试（315 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
+tests/        28 files  351 项测试（337 pytest:纯函数 + Agent 图剧本化 + API 集成 + 14 vitest 前端）
 frontend/     -        Vue 3 电商商城（6页面 + Pinia状态管理）
 docs/         2 files  数据合规 + 评分阈值校准报告
 root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
@@ -286,7 +286,7 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 > "不用 astream_events——因为 tools 节点是直接执行 Skill 而不是走 ToolNode,不会产生 on_tool_start 事件。用 graph.astream 的三种 stream mode 组合:custom 模式由节点内 get_stream_writer 发 node_start/tool_call/tool_result 事件,updates 模式取节点结果和事实核查结论,messages 模式拿 decide 节点的 token 级 delta。前端用原生 fetch 手写 SSE 帧解析、渲染步骤条,token 打完再用 answer 事件做权威全文覆盖——因为 respond 节点可能修正 Markdown、fact_check 会追加警告。"
 
 ### Q: 测试怎么设计的？
-> "分层设计,329 个用例(后端 315 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
+> "分层设计,351 个用例(后端 337 + 前端 14)全部离线秒级跑完:① 纯函数层——fact_checker 正则边界、data_store 并发安全、events 快照对比、json_repair 修复规则、guardrails 注入规则;② Agent 图层——用剧本化适配器注入降级链,测图的直接回答/工具调用→事实核查/反思回环三条主路径,以及 SSE 事件序,零真实 LLM 调用;③ API 集成层——TestClient 测限流按 session 分桶、调试端点 Api-Key、注入拦截 403、流式事件顺序。CI 每次 push 自动跑。"
 
 ### Q: 怎么部署？
 > "docker compose up -d 一键启动全部 4 个服务。Ollama 拆了独立的 GPU profile——纯 CPU 环境用 OpenAI 兼容 API 也能跑。前端用 Nginx 做反向代理，/api/* 自动转发。GitHub Actions 在每次 push 自动跑测试和导入校验。"
@@ -312,10 +312,13 @@ root          + docker-compose.milvus.yml(独立 Milvus standalone 开发栈)
 4. 后台 Watcher 每 5 分钟比快照 → 6 条规则检测异常 → HIGH 事件自动触发三 Agent（Monitor→Analysis→Strategy）流水线分析,三段结果落库可查;分群历史快照画成时间趋势图
 5. 数据飞轮——用户反馈 + 自动评分 → 高质量样本入库 → 向量索引 → 反哺 Agent 系统提示
 6. 会话记忆持久化(JSON checkpointer,重启不丢)+ 长对话自动摘要;个性化推荐闭环(图像标签→画像→打分推荐→一键加购)
-7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 329 个测试（315 pytest + 14 vitest）
+7. Docker Compose 一键部署 + GitHub Actions CI 自动跑 **337 个后端测试**（pytest，`--collect-only` 实测数）+ 前端 vitest 用例
 
 **Result**：
-- 三层核查下事实准确率接近 100%
+- 三层核查：自建对抗基准（43 条注入错误 + 34 条干净改写）**拦截率 100%、误报率 0%**，单次核查 0.09ms（p50）
+  - 复现：`python eval/factcheck_bench.py`（纯确定性，零 LLM / 零数据库 / 零网络）
+  - **口径说明**：该基准按**已知句式族**构造，衡量的是「每个句式族的核查是否生效」，**不等于**未见过改写的覆盖率；更隐蔽的改写不在覆盖内（边界见 `agent/fact_checker.py` docstring）
+  - 基准建成后立刻暴露 2 个真 bug：① `_NUM_WITH_SEP` 用 `\d{1,3}` 导致 **4 位以上的总数/差额声明被静默跳过**（1817、1217 均漏检）② 倍数核查默认按人数比对，把正确的指标倍数判成违规
 - 混合检索 Hit@1=70%、MRR=0.75
 - 11 个可插拔 Skill（分析 7 + 商品 3 + 图像解析 1），购物/分析双场景工具物理隔离
 - 流式 SSE + Agent Trace 可观测性面板

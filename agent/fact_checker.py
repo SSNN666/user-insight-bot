@@ -58,7 +58,9 @@ class FactCheckResult(BaseModel):
     passed: bool
     violations: list[FactViolation] = Field(default_factory=list)
     check_mode: Literal["relaxed", "strict"] = "relaxed"
-    total_checks_run: int = 0
+    # 违规条数（不是"执行了多少项核查"）。历史字段名 total_checks_run 名实不符，
+    # 已更名以免误导（该字段原先也无外部读取方）。
+    total_violations: int = 0
     correction_hints: list[str] = Field(default_factory=list)
 
     def format_violations_for_user(self) -> str:
@@ -115,8 +117,11 @@ RE_SEGMENT_COMPARE = re.compile(
     r'分群\s*(\d+).*?比.*?分群\s*(\d+).*?(高|低|多|少)'
 )
 # ── 换说法句式族(Phase: 覆盖边界收敛——README 曾自承"只认固定句式")──
-# 千分位数字 "1,200 人" / "共 1,234 名用户"
-_NUM_WITH_SEP = r'\d{1,3}(?:,\d{3})*'
+# 数字：兼容千分位 "1,200" 与裸写 "1200"。
+# ⚠️ 不可写成 \d{1,3}(?:,\d{3})* —— 那样 \d{1,3} 最多吃 3 位，
+# "1817" 只匹配到 "181"，后续的 "名用户"/"人" 接不上 → 整个正则不匹配，
+# 导致 4 位以上的总数/差额声明被静默跳过（实测漏检 1817/1217 两条）。
+_NUM_WITH_SEP = r'\d+(?:,\d{3})*'
 _RELAX_WORDS = r'(?:约|大约|大概|近|左右)?'
 # 占比:"分群2占比 55%" / "分群 2 占了全部用户的 55.6%"(group2=约/左右等容差词)
 RE_PCT_SHARE = re.compile(
@@ -312,22 +317,57 @@ def _fact_check_numerical(
             ))
 
     # 换说法 3:倍数句式 "分群0 是分群2 的 2.5 倍"
+    # 裸"X 倍"（两侧既无指标词也无人称词）指向不明：只按用户数比对会把正确的
+    # 指标倍数判成违规（实测误报「分群3 是分群0 的 12 倍」= 正确的消费倍数）。
+    # 因此先枚举所有合理解释，命中任一即放行，全不命中才报错。
+    _RATIO_FIELDS = ('平均消费', '平均频次', '平均近度')
     for m in RE_MULTIPLE_OF.finditer(llm_response):
         seg_a, seg_b = int(m.group(1)), int(m.group(3))
         span = (m.group(2) or "") + (m.group(4) or "")
-        # 两侧区间含指标词且无人数词 → 说的是消费/频次不是人数,跳过
-        if _METRIC_KW.search(span) and not _PEOPLE_KW.search(span):
-            continue
         a_row, b_row = segment_lookup.get(seg_a), segment_lookup.get(seg_b)
-        if not a_row or not b_row or not a_row.get('用户数') or not b_row.get('用户数'):
+        if not a_row or not b_row:
             continue
-        claimed = _claim_num(m.group(5))
-        actual_ratio = a_row['用户数'] / b_row['用户数']
-        if not _rounded_match(m.group(5), actual_ratio):
+        claimed_str = m.group(5)
+        has_metric = bool(_METRIC_KW.search(span))
+        has_people = bool(_PEOPLE_KW.search(span))
+
+        candidates: dict[str, float] = {}
+        if not has_metric or has_people:      # 未排除人数口径
+            if a_row.get('用户数') and b_row.get('用户数'):
+                candidates['用户数'] = a_row['用户数'] / b_row['用户数']
+        if not has_people or has_metric:      # 未排除指标口径
+            for f in _RATIO_FIELDS:
+                if a_row.get(f) and b_row.get(f):
+                    candidates[f] = a_row[f] / b_row[f]
+        if not candidates:
+            continue
+
+        if any(_rounded_match(claimed_str, v) for v in candidates.values()):
+            continue
+
+        # 全部解释都不匹配 → 报错。
+        # 人数口径可用时沿用原字段名与文案（保持既有语义，不改变下游消费方）；
+        # 否则退回最接近的指标口径，避免"分群X是分群Y的N倍"被硬扣人数而误报。
+        if '用户数' in candidates:
+            actual_ratio = candidates['用户数']
             _count_violation(
-                seg_a, '用户数倍数', claimed, round(actual_ratio, 2), m.group(0),
-                f'分群{seg_a}用户数是分群{seg_b}的 {actual_ratio:.2f} 倍，而非 {claimed:g} 倍',
+                seg_a, '用户数倍数', _claim_num(claimed_str), round(actual_ratio, 2),
+                m.group(0),
+                f'分群{seg_a}用户数是分群{seg_b}的 {actual_ratio:.2f} 倍，'
+                f'而非 {_claim_num(claimed_str):g} 倍',
             )
+            continue
+
+        best_field, best_val = min(
+            candidates.items(),
+            key=lambda kv: abs(_claim_num(claimed_str) - kv[1]),
+        )
+        _count_violation(
+            seg_a, f'{best_field}倍数', _claim_num(claimed_str), round(best_val, 2),
+            m.group(0),
+            f'分群{seg_a}的{best_field}约为分群{seg_b}的 {best_val:.2f} 倍，'
+            f'而非 {_claim_num(claimed_str):g} 倍',
+        )
 
     # 换说法 4:差额句式 "分群0 比分群2 多 70 人"
     for m in RE_DIFF_COUNT.finditer(llm_response):
@@ -493,8 +533,9 @@ def _fact_check_logic(
     max_seg = rows_by_seg[-1]
     min_seg = rows_by_seg[0]
 
-    # Invariant: highest segment has highest monetary
-    high_monetary_ok = max_seg.get('平均消费', 0) >= min_seg.get('平均消费', 0)
+    # 注：原有一行 high_monetary_ok = max_seg['平均消费'] >= min_seg['平均消费']
+    # 计算后从未被使用（死变量，且易被误读为"已校验该不变量"）。已移除。
+    # 下方的方向核查直接取 max_seg/min_seg 的实际值比对，不依赖该不变量成立。
 
     # Check comparative claims about "高价值用户"
     for m in RE_COMPARATIVE.finditer(llm_response):
@@ -578,7 +619,7 @@ def run_fact_check(
                 description="LLM 回复为空，无法进行事实核查",
             )],
             check_mode=check_mode,  # type: ignore[arg-type]
-            total_checks_run=1,
+            total_violations=1,
         )
 
     all_violations: list[FactViolation] = []
@@ -593,7 +634,6 @@ def run_fact_check(
     all_violations.extend(_fact_check_logic(llm_response, skill_results))
 
     passed = len(all_violations) == 0
-    total_checks = len(all_violations)  # each violation = one check that failed
 
     correction_hints: list[str] = []
     if not passed and check_mode == "strict":
@@ -606,7 +646,7 @@ def run_fact_check(
         passed=passed,
         violations=all_violations,
         check_mode=check_mode,  # type: ignore[arg-type]
-        total_checks_run=total_checks,
+        total_violations=len(all_violations),
         correction_hints=correction_hints,
     )
     logger.info("fact_check_done", extra={

@@ -1,0 +1,1118 @@
+{
+  "meta": {
+    "timestamp": "2026-09-10T04:34:06+00:00",
+    "benchmark": "factcheck_bench",
+    "n_positive": 43,
+    "n_negative": 34,
+    "note": "纯确定性基准，零 LLM/数据库/网络；覆盖边界见 missed_samples"
+  },
+  "summary": {
+    "n_positive": 43,
+    "n_negative": 34,
+    "overall_interception_rate": 1.0,
+    "false_positive_rate": 0.0,
+    "per_layer_recall": {
+      "layer_1": {
+        "n": 34,
+        "hit": 34,
+        "recall": 1.0
+      },
+      "layer_2": {
+        "n": 5,
+        "hit": 5,
+        "recall": 1.0
+      },
+      "layer_3": {
+        "n": 4,
+        "hit": 4,
+        "recall": 1.0
+      }
+    },
+    "per_family": {
+      "L1_分群用户数": {
+        "n": 8,
+        "hit": 8,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_平均消费": {
+        "n": 4,
+        "hit": 4,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_平均频次": {
+        "n": 4,
+        "hit": 4,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_平均近度": {
+        "n": 4,
+        "hit": 4,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_占比": {
+        "n": 4,
+        "hit": 4,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_表格行": {
+        "n": 4,
+        "hit": 4,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_全平台总数": {
+        "n": 2,
+        "hit": 2,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_倍数关系": {
+        "n": 2,
+        "hit": 2,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L1_差额关系": {
+        "n": 2,
+        "hit": 2,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L2_捏造阈值": {
+        "n": 5,
+        "hit": 5,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L3_方向矛盾": {
+        "n": 2,
+        "hit": 2,
+        "positive": true,
+        "rate": 1.0
+      },
+      "L3_不存在分群": {
+        "n": 2,
+        "hit": 2,
+        "positive": true,
+        "rate": 1.0
+      },
+      "N_分群用户数": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_平均消费": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_平均频次": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_平均近度": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_占比": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_表格行": {
+        "n": 4,
+        "hit": 4,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_全平台总数": {
+        "n": 3,
+        "hit": 3,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_倍数关系": {
+        "n": 1,
+        "hit": 1,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_差额关系": {
+        "n": 1,
+        "hit": 1,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_合法阈值": {
+        "n": 2,
+        "hit": 2,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_方向正确": {
+        "n": 2,
+        "hit": 2,
+        "positive": false,
+        "rate": 1.0
+      },
+      "N_存在分群": {
+        "n": 1,
+        "hit": 1,
+        "positive": false,
+        "rate": 1.0
+      }
+    },
+    "latency_ms": {
+      "mean": 0.0917,
+      "p50": 0.0746,
+      "max": 0.5405
+    }
+  },
+  "samples": [
+    {
+      "text": "分群 0 有 377 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.5405
+    },
+    {
+      "text": "分群 0 有 617 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.135
+    },
+    {
+      "text": "分群 0 的平均消费为 269.9。",
+      "family": "L1_平均消费",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1129
+    },
+    {
+      "text": "分群 0 的平均频次为 17.1。",
+      "family": "L1_平均频次",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0948
+    },
+    {
+      "text": "分群 0 的平均近度为 43.9。",
+      "family": "L1_平均近度",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0876
+    },
+    {
+      "text": "分群 0 占比 71%。",
+      "family": "L1_占比",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0878
+    },
+    {
+      "text": "| 0 | 377 | 8.5 | 1.8 | 65.0 |",
+      "family": "L1_表格行",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0805
+    },
+    {
+      "text": "分群 1 有 1037 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0781
+    },
+    {
+      "text": "分群 1 有 1717 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0818
+    },
+    {
+      "text": "分群 1 的平均消费为 731.9。",
+      "family": "L1_平均消费",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.081
+    },
+    {
+      "text": "分群 1 的平均频次为 24.3。",
+      "family": "L1_平均频次",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0777
+    },
+    {
+      "text": "分群 1 的平均近度为 93.9。",
+      "family": "L1_平均近度",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.077
+    },
+    {
+      "text": "分群 1 占比 99%。",
+      "family": "L1_占比",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0862
+    },
+    {
+      "text": "| 1 | 1037 | 21.0 | 3.6 | 180.5 |",
+      "family": "L1_表格行",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0729
+    },
+    {
+      "text": "分群 2 有 302 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0737
+    },
+    {
+      "text": "分群 2 有 492 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0733
+    },
+    {
+      "text": "分群 2 的平均消费为 1729.9。",
+      "family": "L1_平均消费",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0791
+    },
+    {
+      "text": "分群 2 的平均频次为 35.5。",
+      "family": "L1_平均频次",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0771
+    },
+    {
+      "text": "分群 2 的平均近度为 57.9。",
+      "family": "L1_平均近度",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0805
+    },
+    {
+      "text": "分群 2 占比 59%。",
+      "family": "L1_占比",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.2683
+    },
+    {
+      "text": "| 2 | 302 | 12.0 | 6.4 | 430.0 |",
+      "family": "L1_表格行",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1647
+    },
+    {
+      "text": "分群 3 有 152 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1348
+    },
+    {
+      "text": "分群 3 有 242 人。",
+      "family": "L1_分群用户数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.121
+    },
+    {
+      "text": "分群 3 的平均消费为 3129.9。",
+      "family": "L1_平均消费",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1816
+    },
+    {
+      "text": "分群 3 的平均频次为 46.7。",
+      "family": "L1_平均频次",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1427
+    },
+    {
+      "text": "分群 3 的平均近度为 25.9。",
+      "family": "L1_平均近度",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1258
+    },
+    {
+      "text": "分群 3 占比 35%。",
+      "family": "L1_占比",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1245
+    },
+    {
+      "text": "| 3 | 152 | 4.0 | 9.2 | 780.0 |",
+      "family": "L1_表格行",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1126
+    },
+    {
+      "text": "全平台共 1817 名用户。",
+      "family": "L1_全平台总数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1069
+    },
+    {
+      "text": "全部用户合计 1217 人。",
+      "family": "L1_全平台总数",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0742
+    },
+    {
+      "text": "分群 3 是分群 0 的 99 倍。",
+      "family": "L1_倍数关系",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.1004
+    },
+    {
+      "text": "分群 2 是分群 0 的 47 倍。",
+      "family": "L1_倍数关系",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0884
+    },
+    {
+      "text": "分群 1 比 分群 0 多 999 人。",
+      "family": "L1_差额关系",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.094
+    },
+    {
+      "text": "分群 0 比 分群 1 多 500 人。",
+      "family": "L1_差额关系",
+      "is_positive": true,
+      "target_layer": "layer_1",
+      "detected": true,
+      "layers_fired": [
+        "layer_1"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0896
+    },
+    {
+      "text": "消费 > 9999 的用户属于高价值群体。",
+      "family": "L2_捏造阈值",
+      "is_positive": true,
+      "target_layer": "layer_2",
+      "detected": true,
+      "layers_fired": [
+        "layer_2"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0842
+    },
+    {
+      "text": "消费 > 888 的用户属于高价值群体。",
+      "family": "L2_捏造阈值",
+      "is_positive": true,
+      "target_layer": "layer_2",
+      "detected": true,
+      "layers_fired": [
+        "layer_2"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0795
+    },
+    {
+      "text": "消费 > 0.5 的用户属于高价值群体。",
+      "family": "L2_捏造阈值",
+      "is_positive": true,
+      "target_layer": "layer_2",
+      "detected": true,
+      "layers_fired": [
+        "layer_2"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0767
+    },
+    {
+      "text": "消费 > 1500.0 的用户属于高价值群体。",
+      "family": "L2_捏造阈值",
+      "is_positive": true,
+      "target_layer": "layer_2",
+      "detected": true,
+      "layers_fired": [
+        "layer_2"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0748
+    },
+    {
+      "text": "近度 <= 99.0 的用户需要召回。",
+      "family": "L2_捏造阈值",
+      "is_positive": true,
+      "target_layer": "layer_2",
+      "detected": true,
+      "layers_fired": [
+        "layer_2"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0746
+    },
+    {
+      "text": "高价值用户的消费低。",
+      "family": "L3_方向矛盾",
+      "is_positive": true,
+      "target_layer": "layer_3",
+      "detected": true,
+      "layers_fired": [
+        "layer_3"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0754
+    },
+    {
+      "text": "核心用户的频次少。",
+      "family": "L3_方向矛盾",
+      "is_positive": true,
+      "target_layer": "layer_3",
+      "detected": true,
+      "layers_fired": [
+        "layer_3"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.072
+    },
+    {
+      "text": "分群 9 比 分群 0 消费高。",
+      "family": "L3_不存在分群",
+      "is_positive": true,
+      "target_layer": "layer_3",
+      "detected": true,
+      "layers_fired": [
+        "layer_3"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0782
+    },
+    {
+      "text": "分群 1 比 分群 7 频次高。",
+      "family": "L3_不存在分群",
+      "is_positive": true,
+      "target_layer": "layer_3",
+      "detected": true,
+      "layers_fired": [
+        "layer_3"
+      ],
+      "target_hit": true,
+      "n_violations": 1,
+      "elapsed_ms": 0.0745
+    },
+    {
+      "text": "分群 0 有 120 人。",
+      "family": "N_分群用户数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0673
+    },
+    {
+      "text": "分群 0 的平均消费为 65.0。",
+      "family": "N_平均消费",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0723
+    },
+    {
+      "text": "分群 0 的平均频次为 1.8。",
+      "family": "N_平均频次",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.069
+    },
+    {
+      "text": "分群 0 的平均近度为 8.5。",
+      "family": "N_平均近度",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.067
+    },
+    {
+      "text": "分群 0 占比 20.0%。",
+      "family": "N_占比",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0715
+    },
+    {
+      "text": "| 0 | 120 | 8.5 | 1.8 | 65.0 |",
+      "family": "N_表格行",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0662
+    },
+    {
+      "text": "分群 1 有 340 人。",
+      "family": "N_分群用户数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0676
+    },
+    {
+      "text": "分群 1 的平均消费为 180.5。",
+      "family": "N_平均消费",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0742
+    },
+    {
+      "text": "分群 1 的平均频次为 3.6。",
+      "family": "N_平均频次",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0669
+    },
+    {
+      "text": "分群 1 的平均近度为 21.0。",
+      "family": "N_平均近度",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.068
+    },
+    {
+      "text": "分群 1 占比 56.7%。",
+      "family": "N_占比",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.073
+    },
+    {
+      "text": "| 1 | 340 | 21.0 | 3.6 | 180.5 |",
+      "family": "N_表格行",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0741
+    },
+    {
+      "text": "分群 2 有 95 人。",
+      "family": "N_分群用户数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0675
+    },
+    {
+      "text": "分群 2 的平均消费为 430.0。",
+      "family": "N_平均消费",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0689
+    },
+    {
+      "text": "分群 2 的平均频次为 6.4。",
+      "family": "N_平均频次",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0693
+    },
+    {
+      "text": "分群 2 的平均近度为 12.0。",
+      "family": "N_平均近度",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0684
+    },
+    {
+      "text": "分群 2 占比 15.8%。",
+      "family": "N_占比",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0692
+    },
+    {
+      "text": "| 2 | 95 | 12.0 | 6.4 | 430.0 |",
+      "family": "N_表格行",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0715
+    },
+    {
+      "text": "分群 3 有 45 人。",
+      "family": "N_分群用户数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0673
+    },
+    {
+      "text": "分群 3 的平均消费为 780.0。",
+      "family": "N_平均消费",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0681
+    },
+    {
+      "text": "分群 3 的平均频次为 9.2。",
+      "family": "N_平均频次",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0663
+    },
+    {
+      "text": "分群 3 的平均近度为 4.0。",
+      "family": "N_平均近度",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0663
+    },
+    {
+      "text": "分群 3 占比 7.5%。",
+      "family": "N_占比",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0679
+    },
+    {
+      "text": "| 3 | 45 | 4.0 | 9.2 | 780.0 |",
+      "family": "N_表格行",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0621
+    },
+    {
+      "text": "全平台共 600 名用户。",
+      "family": "N_全平台总数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0623
+    },
+    {
+      "text": "全平台共约 600 名用户。",
+      "family": "N_全平台总数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.06
+    },
+    {
+      "text": "全部用户合计 600 人。",
+      "family": "N_全平台总数",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0609
+    },
+    {
+      "text": "分群 3 是分群 0 的 12 倍。",
+      "family": "N_倍数关系",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.1071
+    },
+    {
+      "text": "分群 1 比 分群 0 多 220 人。",
+      "family": "N_差额关系",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.091
+    },
+    {
+      "text": "消费 > 300 的用户属于高价值群体。",
+      "family": "N_合法阈值",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0693
+    },
+    {
+      "text": "近度 <= 30.5 的用户需要召回。",
+      "family": "N_合法阈值",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0656
+    },
+    {
+      "text": "高价值用户的消费高。",
+      "family": "N_方向正确",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0636
+    },
+    {
+      "text": "核心用户的频次多。",
+      "family": "N_方向正确",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0639
+    },
+    {
+      "text": "分群 2 比 分群 0 消费高。",
+      "family": "N_存在分群",
+      "is_positive": false,
+      "target_layer": null,
+      "detected": false,
+      "layers_fired": [],
+      "target_hit": null,
+      "n_violations": 0,
+      "elapsed_ms": 0.0679
+    }
+  ]
+}
